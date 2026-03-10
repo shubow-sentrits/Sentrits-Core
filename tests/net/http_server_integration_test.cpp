@@ -97,6 +97,8 @@ TEST_F(HttpServerFixture, WebSocketSessionEndpointStreamsTerminalOutput) {
   websocket.read(buffer);
   const std::string payload = beast::buffers_to_string(buffer.data());
 
+  EXPECT_NE(payload.find("\"type\":\"terminal.output\""), std::string::npos);
+  EXPECT_NE(payload.find("\"sessionId\":\"s_1\""), std::string::npos);
   EXPECT_NE(payload.find("\"seqStart\""), std::string::npos);
   EXPECT_NE(payload.find("\"data\""), std::string::npos);
 }

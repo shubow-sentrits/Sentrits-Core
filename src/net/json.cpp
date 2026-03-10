@@ -56,12 +56,22 @@ auto ToJson(const vibe::session::OutputSlice& slice) -> std::string {
   return json::serialize(object);
 }
 
+auto ToJson(const TerminalOutputEvent& event) -> std::string {
+  json::object object;
+  object["type"] = "terminal.output";
+  object["sessionId"] = event.session_id;
+  object["seqStart"] = event.slice.seq_start;
+  object["seqEnd"] = event.slice.seq_end;
+  object["data"] = event.slice.data;
+  return json::serialize(object);
+}
+
 auto ToJsonHostInfo() -> std::string {
   json::object object;
   object["hostId"] = "local-dev-host";
   object["displayName"] = "VibeEverywhere Dev Host";
   object["version"] = "0.1.0";
-  object["capabilities"] = {"sessions", "rest"};
+  object["capabilities"] = {"sessions", "rest", "websocket"};
   return json::serialize(object);
 }
 
