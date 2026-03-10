@@ -7,12 +7,30 @@
 
 namespace vibe::net {
 
+namespace {
+
+void ApplyCorsHeaders(HttpResponse& response) {
+  response.set(http::field::access_control_allow_origin, "*");
+  response.set(http::field::access_control_allow_methods, "GET, POST, OPTIONS");
+  response.set(http::field::access_control_allow_headers, "content-type");
+}
+
+}  // namespace
+
 auto HandleRequest(const HttpRequest& request,
                    vibe::service::SessionManager& session_manager) -> HttpResponse {
   HttpResponse response;
   response.version(request.version());
   response.keep_alive(false);
   response.set(http::field::content_type, "application/json; charset=utf-8");
+  ApplyCorsHeaders(response);
+
+  if (request.method() == http::verb::options) {
+    response.result(http::status::no_content);
+    response.body() = "";
+    response.prepare_payload();
+    return response;
+  }
 
   if (request.method() == http::verb::get && request.target() == "/host/info") {
     response.result(http::status::ok);

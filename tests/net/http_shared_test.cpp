@@ -17,6 +17,7 @@ TEST(HttpSharedTest, ReturnsHealthResponse) {
   const HttpResponse response = HandleRequest(request, session_manager);
   EXPECT_EQ(response.result(), http::status::ok);
   EXPECT_EQ(response.body(), "ok\n");
+  EXPECT_EQ(response[http::field::access_control_allow_origin], "*");
 }
 
 TEST(HttpSharedTest, ReturnsNotFoundForUnknownRoute) {
@@ -41,6 +42,21 @@ TEST(HttpSharedTest, ReturnsHostInfo) {
   const HttpResponse response = HandleRequest(request, session_manager);
   EXPECT_EQ(response.result(), http::status::ok);
   EXPECT_NE(response.body().find("\"hostId\":\"local-dev-host\""), std::string::npos);
+  EXPECT_EQ(response[http::field::access_control_allow_origin], "*");
+}
+
+TEST(HttpSharedTest, ReturnsCorsPreflightResponse) {
+  auto session_manager = MakeManager();
+  HttpRequest request;
+  request.method(http::verb::options);
+  request.target("/sessions");
+  request.version(11);
+
+  const HttpResponse response = HandleRequest(request, session_manager);
+  EXPECT_EQ(response.result(), http::status::no_content);
+  EXPECT_EQ(response[http::field::access_control_allow_origin], "*");
+  EXPECT_EQ(response[http::field::access_control_allow_methods], "GET, POST, OPTIONS");
+  EXPECT_EQ(response[http::field::access_control_allow_headers], "content-type");
 }
 
 TEST(HttpSharedTest, CanCreateAndListSessions) {

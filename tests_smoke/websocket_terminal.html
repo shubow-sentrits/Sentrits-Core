@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VibeEverywhere WebSocket Smoke</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm/css/xterm.css">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f2efe8;
+      --panel: #fffdf8;
+      --ink: #1f1d1a;
+      --muted: #6b655c;
+      --accent: #0c6d62;
+      --accent-2: #d96c3f;
+      --border: #d8d0c2;
+      --terminal: #161513;
+      --terminal-ink: #efe7d7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Iosevka Comfy", "SF Mono", Menlo, monospace;
+      background:
+        radial-gradient(circle at top left, rgba(217, 108, 63, 0.16), transparent 35%),
+        radial-gradient(circle at bottom right, rgba(12, 109, 98, 0.18), transparent 40%),
+        var(--bg);
+      color: var(--ink);
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      letter-spacing: 0.04em;
+    }
+
+    p {
+      margin: 0 0 20px;
+      color: var(--muted);
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 14px 40px rgba(31, 29, 26, 0.08);
+      margin-bottom: 16px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .row.controls {
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .row.discovery {
+      grid-template-columns: 180px minmax(0, 1fr);
+      align-items: start;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    input, button {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      font: inherit;
+    }
+
+    button {
+      background: white;
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    button.warning {
+      background: var(--accent-2);
+      color: white;
+      border-color: var(--accent-2);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    #status {
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 1.2em;
+    }
+
+    #terminal {
+      min-height: 420px;
+      max-height: 60vh;
+      overflow: auto;
+      border-radius: 14px;
+      background: linear-gradient(180deg, #20201c, var(--terminal));
+      color: var(--terminal-ink);
+      border: 1px solid #34312d;
+      padding: 8px;
+      outline: none;
+    }
+
+    #terminal:focus {
+      box-shadow: inset 0 0 0 2px rgba(217, 108, 63, 0.6);
+    }
+
+    #events {
+      min-height: 140px;
+      max-height: 220px;
+      overflow: auto;
+      background: #201f1b;
+      color: #d7d0c2;
+      border-radius: 14px;
+      border: 1px solid #34312d;
+      padding: 12px;
+      white-space: pre-wrap;
+    }
+
+    #sessions-list {
+      min-height: 48px;
+      max-height: 180px;
+      overflow: auto;
+      background: #f7f3ea;
+      color: var(--ink);
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      padding: 10px;
+    }
+
+    .session-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(216, 208, 194, 0.8);
+    }
+
+    .session-item:last-child {
+      border-bottom: none;
+    }
+
+    .session-meta {
+      min-width: 0;
+    }
+
+    .session-id-button {
+      width: auto;
+      padding: 6px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 800px) {
+      .row,
+      .row.controls,
+      .row.discovery {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      #terminal {
+        min-height: 55vh;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h1>Remote Smoke Terminal</h1>
+      <p>Browser-only smoke page for `/ws/sessions/{id}`. It decodes base64 terminal output and forwards basic keyboard input.</p>
+
+      <div class="row">
+        <div>
+          <label for="host">Host</label>
+          <input id="host" value="127.0.0.1">
+        </div>
+        <div>
+          <label for="port">Port</label>
+          <input id="port" value="18085">
+        </div>
+        <div>
+          <label for="session">Session Id</label>
+          <input id="session" value="s_1">
+        </div>
+        <div>
+          <label for="cols">Cols</label>
+          <input id="cols" value="120">
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="rows">Rows</label>
+          <input id="rows" value="40">
+        </div>
+      </div>
+
+      <div class="row controls">
+        <button id="connect" class="primary">Connect</button>
+        <button id="disconnect">Disconnect</button>
+        <button id="list-sessions">List Sessions</button>
+        <button id="request-control">Request Control</button>
+        <button id="release-control">Release Control</button>
+        <button id="send-resize">Send Resize</button>
+        <button id="stop" class="warning">Stop Session</button>
+      </div>
+
+      <div class="row discovery">
+        <div>
+          <label>Active Sessions</label>
+        </div>
+        <div id="sessions-list">No sessions loaded.</div>
+      </div>
+
+      <div id="status">Disconnected</div>
+    </div>
+
+    <div class="panel">
+      <div id="terminal" tabindex="0"></div>
+    </div>
+
+    <div class="panel">
+      <div id="events"></div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { Terminal } from 'https://cdn.jsdelivr.net/npm/@xterm/xterm/+esm';
+
+    const hostInput = document.getElementById('host');
+    const portInput = document.getElementById('port');
+    const sessionInput = document.getElementById('session');
+    const colsInput = document.getElementById('cols');
+    const rowsInput = document.getElementById('rows');
+    const statusEl = document.getElementById('status');
+    const terminalEl = document.getElementById('terminal');
+    const eventsEl = document.getElementById('events');
+
+    const connectBtn = document.getElementById('connect');
+    const disconnectBtn = document.getElementById('disconnect');
+    const listSessionsBtn = document.getElementById('list-sessions');
+    const requestControlBtn = document.getElementById('request-control');
+    const releaseControlBtn = document.getElementById('release-control');
+    const sendResizeBtn = document.getElementById('send-resize');
+    const stopBtn = document.getElementById('stop');
+    const sessionsListEl = document.getElementById('sessions-list');
+
+    let ws = null;
+    const terminal = new Terminal({
+      cols: Number(colsInput.value),
+      rows: Number(rowsInput.value),
+      convertEol: false,
+      cursorBlink: true,
+      fontFamily: 'Iosevka Comfy, SF Mono, Menlo, monospace',
+      fontSize: 14,
+      theme: {
+        background: '#161513',
+        foreground: '#efe7d7',
+        cursor: '#d96c3f'
+      }
+    });
+    terminal.open(terminalEl);
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function appendEvent(text) {
+      eventsEl.textContent += `${text}\n`;
+      eventsEl.scrollTop = eventsEl.scrollHeight;
+    }
+
+    function appendTerminal(text) {
+      terminal.write(text);
+    }
+
+    function decodeBase64ToText(encoded) {
+      const binary = atob(encoded);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    }
+
+    function socketUrl() {
+      return `ws://${hostInput.value}:${portInput.value}/ws/sessions/${sessionInput.value}`;
+    }
+
+    function sessionsUrl() {
+      return `http://${hostInput.value}:${portInput.value}/sessions`;
+    }
+
+    function sendJson(payload) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        appendEvent('[local] websocket not open');
+        return;
+      }
+      ws.send(JSON.stringify(payload));
+    }
+
+    function updateButtonState() {
+      const connected = ws && ws.readyState === WebSocket.OPEN;
+      connectBtn.disabled = connected;
+      disconnectBtn.disabled = !connected;
+      listSessionsBtn.disabled = false;
+      requestControlBtn.disabled = !connected;
+      releaseControlBtn.disabled = !connected;
+      sendResizeBtn.disabled = !connected;
+      stopBtn.disabled = !connected;
+    }
+
+    function renderSessions(sessions) {
+      if (!Array.isArray(sessions) || sessions.length === 0) {
+        sessionsListEl.textContent = 'No active sessions returned.';
+        return;
+      }
+
+      sessionsListEl.innerHTML = '';
+      for (const session of sessions) {
+        const row = document.createElement('div');
+        row.className = 'session-item';
+
+        const meta = document.createElement('div');
+        meta.className = 'session-meta';
+        meta.textContent = `${session.sessionId} | ${session.title} | ${session.status} | ${session.controllerKind}`;
+
+        const button = document.createElement('button');
+        button.className = 'session-id-button';
+        button.textContent = 'Use';
+        button.addEventListener('click', () => {
+          sessionInput.value = session.sessionId;
+          appendEvent(`[local] selected session ${session.sessionId}`);
+        });
+
+        row.appendChild(meta);
+        row.appendChild(button);
+        sessionsListEl.appendChild(row);
+      }
+    }
+
+    async function listSessions() {
+      appendEvent(`[local] fetching ${sessionsUrl()}`);
+      try {
+        const response = await fetch(sessionsUrl());
+        const payload = await response.json();
+        renderSessions(payload);
+      } catch (error) {
+        sessionsListEl.textContent = 'Failed to load sessions.';
+        appendEvent(`[local] session list failed: ${String(error)}`);
+      }
+    }
+
+    function connect() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        return;
+      }
+
+      terminal.clear();
+      appendEvent(`[local] connecting to ${socketUrl()}`);
+      ws = new WebSocket(socketUrl());
+
+      ws.addEventListener('open', () => {
+        setStatus(`Connected to ${socketUrl()}`);
+        updateButtonState();
+        terminal.focus();
+      });
+
+      ws.addEventListener('message', (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'terminal.output' && payload.dataEncoding === 'base64') {
+            appendTerminal(decodeBase64ToText(payload.dataBase64 || ''));
+            return;
+          }
+          appendEvent(JSON.stringify(payload));
+        } catch (error) {
+          appendEvent(`[parse-error] ${String(error)}`);
+        }
+      });
+
+      ws.addEventListener('close', () => {
+        setStatus('Disconnected');
+        appendEvent('[local] websocket closed');
+        updateButtonState();
+      });
+
+      ws.addEventListener('error', () => {
+        appendEvent('[local] websocket error');
+      });
+
+      updateButtonState();
+    }
+
+    function disconnect() {
+      if (!ws) {
+        return;
+      }
+      ws.close();
+      ws = null;
+      updateButtonState();
+    }
+
+    function sendResize() {
+      terminal.resize(Number(colsInput.value), Number(rowsInput.value));
+      sendJson({
+        type: 'terminal.resize',
+        cols: Number(colsInput.value),
+        rows: Number(rowsInput.value),
+      });
+    }
+
+    connectBtn.addEventListener('click', connect);
+    disconnectBtn.addEventListener('click', disconnect);
+    listSessionsBtn.addEventListener('click', listSessions);
+    requestControlBtn.addEventListener('click', () => sendJson({ type: 'session.control.request', kind: 'remote' }));
+    releaseControlBtn.addEventListener('click', () => sendJson({ type: 'session.control.release' }));
+    sendResizeBtn.addEventListener('click', sendResize);
+    stopBtn.addEventListener('click', () => sendJson({ type: 'session.stop' }));
+
+    terminal.onData((data) => sendJson({ type: 'terminal.input', data }));
+    terminalEl.addEventListener('click', () => terminal.focus());
+
+    window.addEventListener('beforeunload', disconnect);
+    updateButtonState();
+  </script>
+</body>
+</html>
