@@ -70,7 +70,7 @@ auto MakeRuntime(FakePtyProcess& pty_process) -> SessionRuntime {
   const ProviderConfig config = DefaultProviderConfig(metadata.provider);
   const LaunchSpec launch_spec = BuildLaunchSpec(metadata, config, {"hello"});
 
-  return SessionRuntime(SessionRecord(metadata), launch_spec, pty_process);
+  return SessionRuntime(SessionRecord(metadata), launch_spec, pty_process, 64);
 }
 
 TEST(SessionRuntimeTest, StartTransitionsToRunningAndStoresPid) {
@@ -130,6 +130,47 @@ TEST(SessionRuntimeTest, TerminateDelegatesWhenProcessExists) {
   ASSERT_TRUE(runtime.Start());
   EXPECT_TRUE(runtime.Terminate());
   EXPECT_EQ(pty_process.terminate_count, 1);
+}
+
+TEST(SessionRuntimeTest, PollOnceAppendsOutputAndUpdatesSnapshotTail) {
+  FakePtyProcess pty_process;
+  pty_process.next_read_result = ReadResult{.data = "chunk-one", .closed = false};
+  SessionRuntime runtime = MakeRuntime(pty_process);
+
+  ASSERT_TRUE(runtime.Start());
+  runtime.PollOnce(0);
+
+  const auto latest_seq = runtime.output_buffer().latest_sequence();
+  ASSERT_TRUE(latest_seq.has_value());
+  EXPECT_EQ(*latest_seq, 1);
+  EXPECT_EQ(runtime.record().snapshot().current_sequence, 1U);
+  EXPECT_EQ(runtime.record().snapshot().recent_terminal_tail, "chunk-one");
+}
+
+TEST(SessionRuntimeTest, PollOnceTransitionsExitedWhenProcessReportsCleanExit) {
+  FakePtyProcess pty_process;
+  pty_process.next_read_result = ReadResult{.data = "", .closed = true};
+  pty_process.next_exit_code = 0;
+  SessionRuntime runtime = MakeRuntime(pty_process);
+
+  ASSERT_TRUE(runtime.Start());
+  runtime.PollOnce(0);
+
+  EXPECT_EQ(runtime.record().metadata().status, SessionStatus::Exited);
+  EXPECT_FALSE(runtime.pid().has_value());
+}
+
+TEST(SessionRuntimeTest, PollOnceTransitionsErrorWhenProcessReportsFailureExit) {
+  FakePtyProcess pty_process;
+  pty_process.next_read_result = ReadResult{.data = "", .closed = true};
+  pty_process.next_exit_code = 2;
+  SessionRuntime runtime = MakeRuntime(pty_process);
+
+  ASSERT_TRUE(runtime.Start());
+  runtime.PollOnce(0);
+
+  EXPECT_EQ(runtime.record().metadata().status, SessionStatus::Error);
+  EXPECT_FALSE(runtime.pid().has_value());
 }
 
 }  // namespace
