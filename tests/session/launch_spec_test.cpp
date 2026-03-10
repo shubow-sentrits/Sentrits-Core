@@ -46,5 +46,16 @@ TEST(LaunchSpecTest, UsesDefaultTerminalSizeWhenNotSpecified) {
   EXPECT_TRUE(spec.arguments.empty());
 }
 
+TEST(LaunchSpecTest, SupportsExplicitCommandOverrideByProviderConfigMutation) {
+  ProviderConfig config = DefaultProviderConfig(ProviderType::Claude);
+  config.executable = "/custom/claude";
+  config.default_args = {"--model", "sonnet"};
+
+  const LaunchSpec spec = BuildLaunchSpec(MakeMetadata(), config);
+
+  EXPECT_EQ(spec.executable, "/custom/claude");
+  EXPECT_EQ(spec.arguments, (std::vector<std::string>{"--model", "sonnet"}));
+}
+
 }  // namespace
 }  // namespace vibe::session

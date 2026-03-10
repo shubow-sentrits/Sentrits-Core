@@ -234,5 +234,25 @@ TEST_F(AuthCoreTest, RestrictsAuthorizationByActionAndRequestOrigin) {
   EXPECT_EQ(local_approval.reason, "");
 }
 
+TEST(AuthCoreTestStandalone, HidesExpiredPendingPairingsAndRejectsApproval) {
+  FakePairingStore pairing_store;
+  std::int64_t now_ms = 1000;
+  DefaultPairingService pairing_service(
+      pairing_store,
+      [&now_ms] { return now_ms; },
+      [] { return "p_exp"; },
+      [] { return "123456"; },
+      [] { return "d_exp"; },
+      [] { return "token_exp"; },
+      100);
+
+  ASSERT_TRUE(pairing_service.StartPairing("Browser", DeviceType::Browser).has_value());
+  ASSERT_EQ(pairing_service.ListPendingPairings().size(), 1U);
+
+  now_ms = 1201;
+  EXPECT_TRUE(pairing_service.ListPendingPairings().empty());
+  EXPECT_FALSE(pairing_service.ApprovePairing("p_exp", "123456").has_value());
+}
+
 }  // namespace
 }  // namespace vibe::auth

@@ -20,6 +20,7 @@ struct CreateSessionRequest {
   vibe::session::ProviderType provider;
   std::string workspace_root;
   std::string title;
+  std::optional<std::vector<std::string>> command_argv;
 };
 
 struct SessionSummary {

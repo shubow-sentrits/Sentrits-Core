@@ -98,8 +98,18 @@ auto SessionManager::CreateSession(const CreateSessionRequest& request)
 
   const vibe::session::ProviderConfig provider_config =
       vibe::session::DefaultProviderConfig(request.provider);
+  vibe::session::ProviderConfig launch_provider_config = provider_config;
+  if (request.command_argv.has_value()) {
+    if (request.command_argv->empty() || request.command_argv->front().empty()) {
+      return std::nullopt;
+    }
+
+    launch_provider_config.executable = request.command_argv->front();
+    launch_provider_config.default_args.assign(request.command_argv->begin() + 1, request.command_argv->end());
+  }
+
   const vibe::session::LaunchSpec launch_spec =
-      vibe::session::BuildLaunchSpec(metadata, provider_config);
+      vibe::session::BuildLaunchSpec(metadata, launch_provider_config);
 
   auto process = std::make_unique<vibe::session::PosixPtyProcess>();
   auto runtime = std::make_unique<vibe::session::SessionRuntime>(

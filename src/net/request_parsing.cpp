@@ -18,6 +18,7 @@ auto ParseCreateSessionRequest(const std::string& body)
   const auto provider_value = object.if_contains("provider");
   const auto workspace_root = object.if_contains("workspaceRoot");
   const auto title = object.if_contains("title");
+  const auto command = object.if_contains("command");
 
   if (provider_value == nullptr || workspace_root == nullptr || title == nullptr ||
       !provider_value->is_string() || !workspace_root->is_string() || !title->is_string()) {
@@ -32,10 +33,35 @@ auto ParseCreateSessionRequest(const std::string& body)
     return std::nullopt;
   }
 
+  std::optional<std::vector<std::string>> command_argv = std::nullopt;
+  if (command != nullptr) {
+    if (!command->is_array()) {
+      return std::nullopt;
+    }
+
+    std::vector<std::string> parsed_command;
+    for (const auto& item : command->as_array()) {
+      if (!item.is_string()) {
+        return std::nullopt;
+      }
+      const std::string argument = json::value_to<std::string>(item);
+      if (argument.empty()) {
+        return std::nullopt;
+      }
+      parsed_command.push_back(argument);
+    }
+
+    if (parsed_command.empty()) {
+      return std::nullopt;
+    }
+    command_argv = std::move(parsed_command);
+  }
+
   return vibe::service::CreateSessionRequest{
       .provider = provider,
       .workspace_root = json::value_to<std::string>(*workspace_root),
       .title = json::value_to<std::string>(*title),
+      .command_argv = std::move(command_argv),
   };
 }
 
