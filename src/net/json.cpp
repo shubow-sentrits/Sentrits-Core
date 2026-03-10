@@ -66,6 +66,25 @@ auto ToJson(const TerminalOutputEvent& event) -> std::string {
   return json::serialize(object);
 }
 
+auto ToJson(const SessionUpdatedEvent& event) -> std::string {
+  json::object object;
+  object["type"] = "session.updated";
+  object["sessionId"] = event.summary.id.value();
+  object["provider"] = std::string(vibe::session::ToString(event.summary.provider));
+  object["workspaceRoot"] = event.summary.workspace_root;
+  object["title"] = event.summary.title;
+  object["status"] = std::string(vibe::session::ToString(event.summary.status));
+  return json::serialize(object);
+}
+
+auto ToJson(const SessionExitedEvent& event) -> std::string {
+  json::object object;
+  object["type"] = "session.exited";
+  object["sessionId"] = event.session_id;
+  object["status"] = std::string(vibe::session::ToString(event.status));
+  return json::serialize(object);
+}
+
 auto ToJsonHostInfo() -> std::string {
   json::object object;
   object["hostId"] = "local-dev-host";

@@ -11,6 +11,7 @@
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -51,7 +52,7 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
 
           self->last_sequence_ = 1;
           self->websocket_registry_[self->session_id_].push_back(self);
-          self->QueueInitialFrame();
+          self->QueueInitialEvents();
           self->DoRead();
         });
   }
@@ -60,6 +61,8 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
     if (session_id_.empty()) {
       return;
     }
+
+    QueueStatusEvents();
 
     const auto output = session_manager_.GetOutputSince(session_id_, last_sequence_);
     if (!output.has_value() || output->data.empty()) {
@@ -81,17 +84,45 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
     std::uint64_t next_sequence{1};
   };
 
-  void QueueInitialFrame() {
-    if (initial_frame_sent_) {
+  void QueueInitialEvents() {
+    if (initial_events_sent_) {
       return;
     }
 
-    initial_frame_sent_ = true;
+    initial_events_sent_ = true;
+    QueueStatusEvents();
+    const auto tail = session_manager_.GetTail(session_id_, 64U * 1024U);
+    const vibe::session::OutputSlice initial_slice = tail.value_or(vibe::session::OutputSlice{});
+    const std::uint64_t next_sequence =
+        initial_slice.seq_end > 0 ? initial_slice.seq_end + 1 : last_sequence_;
     QueueFrame(ToJson(TerminalOutputEvent{
                    .session_id = session_id_,
-                   .slice = {},
+                   .slice = initial_slice,
                }),
-               last_sequence_);
+               next_sequence);
+  }
+
+  void QueueStatusEvents() {
+    const auto summary = session_manager_.GetSession(session_id_);
+    if (!summary.has_value()) {
+      return;
+    }
+
+    if (!last_status_.has_value() || *last_status_ != summary->status) {
+      last_status_ = summary->status;
+      QueueFrame(ToJson(SessionUpdatedEvent{.summary = *summary}), last_sequence_);
+    }
+
+    if (!exit_event_sent_ &&
+        (summary->status == vibe::session::SessionStatus::Exited ||
+         summary->status == vibe::session::SessionStatus::Error)) {
+      exit_event_sent_ = true;
+      QueueFrame(ToJson(SessionExitedEvent{
+                     .session_id = summary->id.value(),
+                     .status = summary->status,
+                 }),
+                 last_sequence_);
+    }
   }
 
   void QueueFrame(std::string payload, const std::uint64_t next_sequence) {
@@ -149,7 +180,9 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
   std::string target_;
   std::string session_id_;
   std::uint64_t last_sequence_{1};
-  bool initial_frame_sent_{false};
+  std::optional<vibe::session::SessionStatus> last_status_;
+  bool initial_events_sent_{false};
+  bool exit_event_sent_{false};
   bool write_in_progress_{false};
 };
 
