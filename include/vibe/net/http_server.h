@@ -4,17 +4,20 @@
 #include <cstdint>
 #include <string>
 
+#include "vibe/service/session_manager.h"
+
 namespace vibe::net {
 
 class HttpServer {
  public:
   HttpServer(std::string bind_address, std::uint16_t port);
 
-  void Run();
+  [[nodiscard]] auto Run() -> bool;
 
  private:
   std::string bind_address_;
   std::uint16_t port_;
+  vibe::service::SessionManager session_manager_;
 };
 
 }  // namespace vibe::net
