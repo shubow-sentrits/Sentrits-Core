@@ -162,7 +162,17 @@ class ScopedRawTerminalMode {
   bool active_{false};
 };
 
-auto HandleServerMessage(const std::string& payload, int& exit_code) -> bool {
+struct SessionStreamState {
+  bool has_control{false};
+  bool control_request_pending{false};
+  std::string active_controller_kind{"none"};
+  bool active_controller_has_client{false};
+};
+
+auto HandleServerMessage(const std::string& payload,
+                         const vibe::session::ControllerKind controller_kind,
+                         SessionStreamState& stream_state,
+                         int& exit_code) -> bool {
   boost::system::error_code error_code;
   const json::value parsed = json::parse(payload, error_code);
   if (error_code || !parsed.is_object()) {
@@ -195,6 +205,47 @@ auto HandleServerMessage(const std::string& payload, int& exit_code) -> bool {
       exit_code = 1;
     }
     return false;
+  }
+
+  if (message_type == "session.updated") {
+    const auto controller_kind_value = object.if_contains("controllerKind");
+    const auto controller_client_id = object.if_contains("controllerClientId");
+    if (controller_kind_value != nullptr && controller_kind_value->is_string()) {
+      const std::string active_controller_kind =
+          json::value_to<std::string>(*controller_kind_value);
+
+      if (controller_kind == vibe::session::ControllerKind::Host) {
+        stream_state.active_controller_kind = active_controller_kind;
+        stream_state.active_controller_has_client =
+            controller_client_id != nullptr && controller_client_id->is_string();
+        if (active_controller_kind == "remote") {
+          stream_state.has_control = false;
+          stream_state.control_request_pending = false;
+        } else if (active_controller_kind == "host") {
+          if (stream_state.control_request_pending ||
+              (controller_client_id != nullptr && controller_client_id->is_string())) {
+            stream_state.has_control = true;
+            stream_state.control_request_pending = false;
+          } else {
+            stream_state.has_control = false;
+          }
+        } else {
+          stream_state.has_control = false;
+          stream_state.control_request_pending = false;
+        }
+      } else if (controller_kind == vibe::session::ControllerKind::Remote) {
+        stream_state.active_controller_kind = active_controller_kind;
+        stream_state.active_controller_has_client =
+            controller_client_id != nullptr && controller_client_id->is_string();
+        stream_state.has_control =
+            active_controller_kind == "remote" &&
+            controller_client_id != nullptr && controller_client_id->is_string();
+        if (stream_state.has_control) {
+          stream_state.control_request_pending = false;
+        }
+      }
+    }
+    return true;
   }
 
   if (message_type == "error") {
@@ -347,31 +398,51 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
     std::cerr << "failed to request control\n";
     return 1;
   }
-  if (!write_command(BuildResizeCommand(DetectTerminalSize()))) {
-    std::cerr << "failed to send initial resize\n";
-    return 1;
-  }
-
+  SessionStreamState stream_state{
+      .has_control = false,
+      .control_request_pending = true,
+      .active_controller_kind = "none",
+      .active_controller_has_client = false,
+  };
   ScopedRawTerminalMode raw_terminal_mode;
   ScopedSignalHandler window_resize_handler(SIGWINCH, HandleWindowResizeSignal);
   auto last_terminal_size = DetectTerminalSize();
+  bool resize_sync_pending = true;
   beast::flat_buffer buffer;
   int exit_code = 0;
   bool stdin_open = true;
   const int websocket_fd = ws.next_layer().native_handle();
 
   while (true) {
+    if (controller_kind == vibe::session::ControllerKind::Host &&
+        !stream_state.has_control &&
+        !stream_state.control_request_pending &&
+        stream_state.active_controller_kind == "host" &&
+        !stream_state.active_controller_has_client) {
+      const bool requested = write_command(BuildControlRequestCommand(controller_kind));
+      if (!requested) {
+        std::cerr << "failed to reclaim host control\n";
+        return 1;
+      }
+      stream_state.control_request_pending = true;
+    }
+
     if (g_terminal_resize_pending != 0) {
       g_terminal_resize_pending = 0;
       const auto current_terminal_size = DetectTerminalSize();
       if (current_terminal_size != last_terminal_size) {
-        const bool wrote_resize = write_command(BuildResizeCommand(current_terminal_size));
-        if (!wrote_resize) {
-          std::cerr << "failed to send resize update\n";
-          return 1;
-        }
         last_terminal_size = current_terminal_size;
+        resize_sync_pending = true;
       }
+    }
+
+    if (stream_state.has_control && resize_sync_pending) {
+      const bool wrote_resize = write_command(BuildResizeCommand(last_terminal_size));
+      if (!wrote_resize) {
+        std::cerr << "failed to send resize update\n";
+        return 1;
+      }
+      resize_sync_pending = false;
     }
 
     fd_set read_fds;
@@ -401,7 +472,7 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
       if (!error_code) {
         const std::string payload = beast::buffers_to_string(buffer.data());
         buffer.consume(buffer.size());
-        if (!HandleServerMessage(payload, exit_code)) {
+        if (!HandleServerMessage(payload, controller_kind, stream_state, exit_code)) {
           return exit_code;
         }
       } else if (error_code == websocket::error::closed) {
@@ -420,6 +491,9 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
           static_cast<void>(released);
           return 0;
         } else if (bytes_read > 0) {
+          if (!stream_state.has_control) {
+            continue;
+          }
           const bool wrote = write_command(
               BuildInputCommand(std::string(input_buffer, static_cast<std::size_t>(bytes_read))));
           if (!wrote) {
