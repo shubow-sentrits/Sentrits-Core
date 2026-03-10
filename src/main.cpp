@@ -114,8 +114,30 @@ void PrintUsage() {
   std::cout << "Usage:\n"
             << "  vibe-hostd serve [bind-address] [port]\n"
             << "  vibe-hostd local-pty [command [args...]]\n"
-            << "  vibe-hostd session-start [title]\n"
-            << "  vibe-hostd session-attach <session-id>\n";
+            << "  vibe-hostd session-start [--host HOST] [--port PORT] [title]\n"
+            << "  vibe-hostd session-attach [--host HOST] [--port PORT] <session-id>\n";
+}
+
+auto ParseEndpointArgs(const int argc, char** argv, int start_index,
+                       vibe::cli::DaemonEndpoint default_endpoint)
+    -> std::pair<vibe::cli::DaemonEndpoint, int> {
+  int index = start_index;
+  while (index < argc) {
+    const std::string argument = argv[index];
+    if (argument == "--host" && index + 1 < argc) {
+      default_endpoint.host = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--port" && index + 1 < argc) {
+      default_endpoint.port = static_cast<std::uint16_t>(std::stoi(argv[index + 1]));
+      index += 2;
+      continue;
+    }
+    break;
+  }
+
+  return {default_endpoint, index};
 }
 
 }  // namespace
@@ -141,24 +163,31 @@ auto main(const int argc, char** argv) -> int {
   }
 
   if (argc >= 2 && std::string(argv[1]) == "session-start") {
-    const std::string title = argc >= 3 ? argv[2] : "host-session";
+    auto [endpoint, arg_index] = ParseEndpointArgs(argc, argv, 2, vibe::cli::DaemonEndpoint{});
+    const std::string title = arg_index < argc ? argv[arg_index] : "host-session";
     const auto session_id = vibe::cli::CreateSession(
-        vibe::cli::DaemonEndpoint{},
+        endpoint,
         vibe::session::ProviderType::Codex,
         std::filesystem::current_path().string(),
         title);
     if (!session_id.has_value()) {
-      std::cerr << "failed to create session via daemon at 127.0.0.1:8080\n";
+      std::cerr << "failed to create session via daemon at " << endpoint.host << ":"
+                << endpoint.port << '\n';
       return 1;
     }
 
     std::cerr << "session " << *session_id << " created\n";
-    return vibe::cli::AttachSession(vibe::cli::DaemonEndpoint{}, *session_id,
+    return vibe::cli::AttachSession(endpoint, *session_id,
                                     vibe::session::ControllerKind::Host);
   }
 
   if (argc >= 3 && std::string(argv[1]) == "session-attach") {
-    return vibe::cli::AttachSession(vibe::cli::DaemonEndpoint{}, argv[2],
+    auto [endpoint, arg_index] = ParseEndpointArgs(argc, argv, 2, vibe::cli::DaemonEndpoint{});
+    if (arg_index >= argc) {
+      std::cerr << "session id required\n";
+      return 1;
+    }
+    return vibe::cli::AttachSession(endpoint, argv[arg_index],
                                     vibe::session::ControllerKind::Host);
   }
 
