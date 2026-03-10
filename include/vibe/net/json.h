@@ -11,11 +11,17 @@
 
 namespace vibe::net {
 
+struct TerminalOutputEvent {
+  std::string session_id;
+  vibe::session::OutputSlice slice;
+};
+
 [[nodiscard]] auto JsonEscape(std::string_view input) -> std::string;
 [[nodiscard]] auto ToJson(const vibe::service::SessionSummary& summary) -> std::string;
 [[nodiscard]] auto ToJson(const std::vector<vibe::service::SessionSummary>& summaries) -> std::string;
 [[nodiscard]] auto ToJson(const vibe::session::SessionSnapshot& snapshot) -> std::string;
 [[nodiscard]] auto ToJson(const vibe::session::OutputSlice& slice) -> std::string;
+[[nodiscard]] auto ToJson(const TerminalOutputEvent& event) -> std::string;
 [[nodiscard]] auto ToJsonHostInfo() -> std::string;
 
 }  // namespace vibe::net

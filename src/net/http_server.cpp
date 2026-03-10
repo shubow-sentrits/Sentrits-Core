@@ -66,7 +66,11 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
       return;
     }
 
-    QueueFrame(ToJson(*output), output->seq_end + 1);
+    QueueFrame(ToJson(TerminalOutputEvent{
+                   .session_id = session_id_,
+                   .slice = *output,
+               }),
+               output->seq_end + 1);
   }
 
   [[nodiscard]] auto session_id() const -> const std::string& { return session_id_; }
@@ -83,7 +87,11 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
     }
 
     initial_frame_sent_ = true;
-    QueueFrame(ToJson(vibe::session::OutputSlice{}), last_sequence_);
+    QueueFrame(ToJson(TerminalOutputEvent{
+                   .session_id = session_id_,
+                   .slice = {},
+               }),
+               last_sequence_);
   }
 
   void QueueFrame(std::string payload, const std::uint64_t next_sequence) {
