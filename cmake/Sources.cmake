@@ -1,6 +1,9 @@
 set(VIBE_CORE_SOURCES
+  src/net/json.cpp
+  src/net/request_parsing.cpp
   src/net/http_server.cpp
   src/net/http_shared.cpp
+  src/service/session_manager.cpp
   src/session/launch_spec.cpp
   src/session/posix_pty_process.cpp
   src/session/provider_config.cpp
@@ -12,6 +15,7 @@ set(VIBE_CORE_SOURCES
 )
 
 set(VIBE_TEST_SOURCES
+  tests/net/http_json_test.cpp
   tests/net/http_shared_test.cpp
   tests/session/launch_spec_test.cpp
   tests/session/posix_pty_process_test.cpp

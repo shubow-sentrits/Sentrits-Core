@@ -26,6 +26,7 @@ target_include_directories(vibe_core
 target_link_libraries(vibe_core
   PUBLIC
     Boost::headers
+    Boost::json
     vibe_warnings
 )
 

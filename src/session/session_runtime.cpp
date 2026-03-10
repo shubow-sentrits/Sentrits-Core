@@ -60,6 +60,20 @@ auto SessionRuntime::Terminate() -> bool {
   return pty_process_.Terminate();
 }
 
+auto SessionRuntime::TerminateAndMarkExited() -> bool {
+  if (!pid_.has_value()) {
+    return false;
+  }
+
+  const bool terminated = pty_process_.Terminate();
+  if (!terminated) {
+    return false;
+  }
+
+  pid_.reset();
+  return record_.TryTransition(SessionStatus::Exited);
+}
+
 auto SessionRuntime::MarkAwaitingInput() -> bool {
   return record_.TryTransition(SessionStatus::AwaitingInput);
 }

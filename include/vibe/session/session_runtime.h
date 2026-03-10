@@ -25,6 +25,7 @@ class SessionRuntime {
   [[nodiscard]] auto WriteInput(std::string_view input) -> bool;
   [[nodiscard]] auto ResizeTerminal(TerminalSize terminal_size) -> bool;
   [[nodiscard]] auto Terminate() -> bool;
+  [[nodiscard]] auto TerminateAndMarkExited() -> bool;
   [[nodiscard]] auto MarkAwaitingInput() -> bool;
   [[nodiscard]] auto MarkRunning() -> bool;
   [[nodiscard]] auto HandleExit(bool clean_exit) -> bool;

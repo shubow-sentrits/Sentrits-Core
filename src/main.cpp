@@ -126,8 +126,7 @@ auto main(const int argc, char** argv) -> int {
     const auto raw_port = argc >= 4 ? std::stoi(argv[3]) : 8080;
     const auto port = static_cast<std::uint16_t>(raw_port);
     vibe::net::HttpServer server(bind_address, port);
-    server.Run();
-    return 0;
+    return server.Run() ? 0 : 1;
   }
 
   if (argc >= 2 && std::string(argv[1]) == "local-pty") {

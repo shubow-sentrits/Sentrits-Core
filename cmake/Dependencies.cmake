@@ -1,4 +1,4 @@
-find_package(Boost 1.87 REQUIRED CONFIG)
+find_package(Boost 1.87 REQUIRED CONFIG COMPONENTS json)
 
 include(FetchContent)
 
