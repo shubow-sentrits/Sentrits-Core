@@ -1,4 +1,5 @@
 set(VIBE_CORE_SOURCES
+  src/cli/daemon_client.cpp
   src/net/json.cpp
   src/net/request_parsing.cpp
   src/net/http_server.cpp
@@ -17,6 +18,7 @@ set(VIBE_CORE_SOURCES
 )
 
 set(VIBE_TEST_SOURCES
+  tests/cli/daemon_client_test.cpp
   tests/net/http_json_test.cpp
   tests/net/http_server_integration_test.cpp
   tests/net/request_parsing_test.cpp

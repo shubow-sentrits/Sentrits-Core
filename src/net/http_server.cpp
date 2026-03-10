@@ -218,8 +218,7 @@ class WebSocketSession : public std::enable_shared_from_this<WebSocketSession> {
             }
             return session_manager_.StopSession(session_id_);
           } else if constexpr (std::is_same_v<T, WebSocketRequestControlCommand>) {
-            return session_manager_.RequestControl(session_id_, client_id_,
-                                                   vibe::session::ControllerKind::Remote);
+            return session_manager_.RequestControl(session_id_, client_id_, value.controller_kind);
           } else if constexpr (std::is_same_v<T, WebSocketReleaseControlCommand>) {
             return session_manager_.ReleaseControl(session_id_, client_id_);
           }

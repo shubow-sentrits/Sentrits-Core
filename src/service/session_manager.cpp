@@ -168,6 +168,13 @@ auto SessionManager::RequestControl(const std::string& session_id, const std::st
       return true;
     }
 
+    if (entry->controller_kind == vibe::session::ControllerKind::Remote &&
+        controller_kind == vibe::session::ControllerKind::Host) {
+      entry->controller_client_id = client_id;
+      entry->controller_kind = controller_kind;
+      return true;
+    }
+
     return *entry->controller_client_id == client_id;
   }
 
