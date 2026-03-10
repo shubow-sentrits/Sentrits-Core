@@ -5,6 +5,28 @@
 namespace vibe::net {
 namespace {
 
+TEST(RequestParsingTest, ParsesCreateSessionRequestWithExplicitCommand) {
+  const auto request = ParseCreateSessionRequest(
+      R"({"provider":"claude","workspaceRoot":".","title":"demo","command":["/opt/homebrew/bin/claude","--print"]})");
+  ASSERT_TRUE(request.has_value());
+  EXPECT_EQ(request->provider, vibe::session::ProviderType::Claude);
+  ASSERT_TRUE(request->command_argv.has_value());
+  EXPECT_EQ(*request->command_argv,
+            (std::vector<std::string>{"/opt/homebrew/bin/claude", "--print"}));
+}
+
+TEST(RequestParsingTest, RejectsInvalidExplicitCommandInCreateSessionRequest) {
+  EXPECT_FALSE(ParseCreateSessionRequest(
+                   R"({"provider":"codex","workspaceRoot":".","title":"demo","command":[]})")
+                   .has_value());
+  EXPECT_FALSE(ParseCreateSessionRequest(
+                   R"({"provider":"codex","workspaceRoot":".","title":"demo","command":[""]})")
+                   .has_value());
+  EXPECT_FALSE(ParseCreateSessionRequest(
+                   R"({"provider":"codex","workspaceRoot":".","title":"demo","command":"codex"})")
+                   .has_value());
+}
+
 TEST(RequestParsingTest, ParsesWebSocketInputCommand) {
   const auto command = ParseWebSocketCommand(R"({"type":"terminal.input","data":"hello\n"})");
   ASSERT_TRUE(command.has_value());

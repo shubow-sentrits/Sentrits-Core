@@ -14,6 +14,7 @@ class DefaultPairingService final : public PairingService {
  public:
   using TimestampProvider = std::function<std::int64_t()>;
   using StringGenerator = std::function<std::string()>;
+  using DurationMs = std::int64_t;
 
   explicit DefaultPairingService(vibe::store::PairingStore& pairing_store);
   DefaultPairingService(vibe::store::PairingStore& pairing_store,
@@ -21,7 +22,8 @@ class DefaultPairingService final : public PairingService {
                         StringGenerator pairing_id_generator,
                         StringGenerator code_generator,
                         StringGenerator device_id_generator,
-                        StringGenerator token_generator);
+                        StringGenerator token_generator,
+                        DurationMs pairing_request_ttl_ms = 10 * 60 * 1000);
 
   [[nodiscard]] auto StartPairing(const std::string& device_name,
                                   DeviceType device_type) -> std::optional<PairingRequest> override;
@@ -37,6 +39,7 @@ class DefaultPairingService final : public PairingService {
   StringGenerator code_generator_;
   StringGenerator device_id_generator_;
   StringGenerator token_generator_;
+  DurationMs pairing_request_ttl_ms_{10 * 60 * 1000};
 };
 
 }  // namespace vibe::auth

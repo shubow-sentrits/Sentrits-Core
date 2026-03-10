@@ -121,6 +121,7 @@ TEST(SessionManagerTest, CreateSessionAllocatesPastHighestRecoveredAndLiveSessio
       .provider = vibe::session::ProviderType::Codex,
       .workspace_root = ".",
       .title = "live-one",
+      .command_argv = std::nullopt,
   });
   ASSERT_TRUE(first_created.has_value());
   EXPECT_EQ(first_created->id.value(), "s_10");
@@ -129,6 +130,7 @@ TEST(SessionManagerTest, CreateSessionAllocatesPastHighestRecoveredAndLiveSessio
       .provider = vibe::session::ProviderType::Codex,
       .workspace_root = ".",
       .title = "live-two",
+      .command_argv = std::nullopt,
   });
   ASSERT_TRUE(second_created.has_value());
   EXPECT_EQ(second_created->id.value(), "s_11");

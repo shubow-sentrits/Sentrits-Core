@@ -10,6 +10,27 @@
 namespace vibe::auth {
 namespace {
 
+auto IsExpired(const PairingRequest& request, const std::int64_t now_ms,
+               const DefaultPairingService::DurationMs ttl_ms) -> bool {
+  if (ttl_ms <= 0) {
+    return false;
+  }
+
+  return request.requested_at_unix_ms + ttl_ms < now_ms;
+}
+
+template <typename Predicate>
+auto FilterRequests(const std::vector<PairingRequest>& requests, Predicate&& predicate)
+    -> std::vector<PairingRequest> {
+  std::vector<PairingRequest> filtered;
+  for (const auto& request : requests) {
+    if (predicate(request)) {
+      filtered.push_back(request);
+    }
+  }
+  return filtered;
+}
+
 auto DefaultTimestampProvider() -> std::int64_t {
   using namespace std::chrono;
   return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
@@ -68,13 +89,15 @@ DefaultPairingService::DefaultPairingService(vibe::store::PairingStore& pairing_
                                              StringGenerator pairing_id_generator,
                                              StringGenerator code_generator,
                                              StringGenerator device_id_generator,
-                                             StringGenerator token_generator)
+                                             StringGenerator token_generator,
+                                             const DurationMs pairing_request_ttl_ms)
     : pairing_store_(pairing_store),
       timestamp_provider_(std::move(timestamp_provider)),
       pairing_id_generator_(std::move(pairing_id_generator)),
       code_generator_(std::move(code_generator)),
       device_id_generator_(std::move(device_id_generator)),
-      token_generator_(std::move(token_generator)) {}
+      token_generator_(std::move(token_generator)),
+      pairing_request_ttl_ms_(pairing_request_ttl_ms) {}
 
 auto DefaultPairingService::StartPairing(const std::string& device_name, const DeviceType device_type)
     -> std::optional<PairingRequest> {
@@ -82,12 +105,19 @@ auto DefaultPairingService::StartPairing(const std::string& device_name, const D
     return std::nullopt;
   }
 
+  const auto now_ms = timestamp_provider_();
+  for (const auto& pending : pairing_store_.LoadPendingPairings()) {
+    if (IsExpired(pending, now_ms, pairing_request_ttl_ms_)) {
+      static_cast<void>(pairing_store_.RemovePendingPairing(pending.pairing_id));
+    }
+  }
+
   PairingRequest request{
       .pairing_id = pairing_id_generator_(),
       .device_name = device_name,
       .device_type = device_type,
       .code = code_generator_(),
-      .requested_at_unix_ms = timestamp_provider_(),
+      .requested_at_unix_ms = now_ms,
   };
 
   if (request.pairing_id.empty() || request.code.size() != 6) {
@@ -102,7 +132,11 @@ auto DefaultPairingService::StartPairing(const std::string& device_name, const D
 }
 
 auto DefaultPairingService::ListPendingPairings() const -> std::vector<PairingRequest> {
-  auto pending_pairings = pairing_store_.LoadPendingPairings();
+  auto pending_pairings = FilterRequests(
+      pairing_store_.LoadPendingPairings(),
+      [this, now_ms = timestamp_provider_()](const PairingRequest& request) {
+        return !IsExpired(request, now_ms, pairing_request_ttl_ms_);
+      });
   std::sort(pending_pairings.begin(), pending_pairings.end(),
             [](const PairingRequest& left, const PairingRequest& right) {
               if (left.requested_at_unix_ms != right.requested_at_unix_ms) {
@@ -115,11 +149,18 @@ auto DefaultPairingService::ListPendingPairings() const -> std::vector<PairingRe
 
 auto DefaultPairingService::ApprovePairing(const std::string& pairing_id, const std::string& code)
     -> std::optional<PairingRecord> {
+  const auto now_ms = timestamp_provider_();
   const auto pending_pairings = pairing_store_.LoadPendingPairings();
+  for (const auto& pending : pending_pairings) {
+    if (IsExpired(pending, now_ms, pairing_request_ttl_ms_)) {
+      static_cast<void>(pairing_store_.RemovePendingPairing(pending.pairing_id));
+    }
+  }
   const auto pending_it =
       std::find_if(pending_pairings.begin(), pending_pairings.end(),
                    [&](const PairingRequest& pending) { return pending.pairing_id == pairing_id; });
-  if (pending_it == pending_pairings.end() || pending_it->code != code) {
+  if (pending_it == pending_pairings.end() || IsExpired(*pending_it, now_ms, pairing_request_ttl_ms_) ||
+      pending_it->code != code) {
     return std::nullopt;
   }
 
