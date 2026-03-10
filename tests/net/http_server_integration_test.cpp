@@ -95,12 +95,65 @@ TEST_F(HttpServerFixture, WebSocketSessionEndpointStreamsTerminalOutput) {
 
   beast::flat_buffer buffer;
   websocket.read(buffer);
-  const std::string payload = beast::buffers_to_string(buffer.data());
+  const std::string first_payload = beast::buffers_to_string(buffer.data());
+  EXPECT_NE(first_payload.find("\"type\":\"session.updated\""), std::string::npos);
+  EXPECT_NE(first_payload.find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(first_payload.find("\"status\""), std::string::npos);
 
-  EXPECT_NE(payload.find("\"type\":\"terminal.output\""), std::string::npos);
-  EXPECT_NE(payload.find("\"sessionId\":\"s_1\""), std::string::npos);
-  EXPECT_NE(payload.find("\"seqStart\""), std::string::npos);
-  EXPECT_NE(payload.find("\"data\""), std::string::npos);
+  buffer.consume(buffer.size());
+  websocket.read(buffer);
+  const std::string second_payload = beast::buffers_to_string(buffer.data());
+  EXPECT_NE(second_payload.find("\"type\":\"terminal.output\""), std::string::npos);
+  EXPECT_NE(second_payload.find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(second_payload.find("\"seqStart\""), std::string::npos);
+  EXPECT_NE(second_payload.find("\"data\""), std::string::npos);
+}
+
+TEST_F(HttpServerFixture, WebSocketSessionEndpointStreamsExitEventsAfterStop) {
+  const std::string create_response = CreateSession();
+  ASSERT_NE(create_response.find("\"sessionId\":\"s_1\""), std::string::npos);
+
+  asio::io_context io_context;
+  tcp::resolver resolver(io_context);
+  websocket::stream<tcp::socket> websocket(io_context);
+  const auto results = resolver.resolve("127.0.0.1", "18088");
+  auto endpoint = asio::connect(websocket.next_layer(), results);
+  static_cast<void>(endpoint);
+
+  websocket.handshake("127.0.0.1:18088", "/ws/sessions/s_1");
+
+  beast::flat_buffer buffer;
+  websocket.read(buffer);
+  buffer.consume(buffer.size());
+  websocket.read(buffer);
+  buffer.consume(buffer.size());
+
+  asio::io_context stop_io_context;
+  tcp::resolver stop_resolver(stop_io_context);
+  tcp::socket stop_socket(stop_io_context);
+  const auto stop_results = stop_resolver.resolve("127.0.0.1", "18088");
+  asio::connect(stop_socket, stop_results);
+
+  http::request<http::string_body> stop_request{http::verb::post, "/sessions/s_1/stop", 11};
+  stop_request.set(http::field::host, "127.0.0.1");
+  stop_request.prepare_payload();
+  http::write(stop_socket, stop_request);
+  beast::flat_buffer stop_buffer;
+  http::response<http::string_body> stop_response;
+  http::read(stop_socket, stop_buffer, stop_response);
+  EXPECT_EQ(stop_response.result(), http::status::ok);
+
+  websocket.read(buffer);
+  const std::string updated_payload = beast::buffers_to_string(buffer.data());
+  EXPECT_NE(updated_payload.find("\"type\":\"session.updated\""), std::string::npos);
+  EXPECT_NE(updated_payload.find("\"status\":\"Exited\""), std::string::npos);
+
+  buffer.consume(buffer.size());
+  websocket.read(buffer);
+  const std::string exited_payload = beast::buffers_to_string(buffer.data());
+  EXPECT_NE(exited_payload.find("\"type\":\"session.exited\""), std::string::npos);
+  EXPECT_NE(exited_payload.find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(exited_payload.find("\"status\":\"Exited\""), std::string::npos);
 }
 
 }  // namespace

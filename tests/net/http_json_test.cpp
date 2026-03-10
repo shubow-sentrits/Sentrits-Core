@@ -46,5 +46,36 @@ TEST(HttpJsonTest, SerializesTerminalOutputEvent) {
   EXPECT_NE(json.find("\"data\":\"tail\""), std::string::npos);
 }
 
+TEST(HttpJsonTest, SerializesSessionUpdatedEvent) {
+  const auto id = vibe::session::SessionId::TryCreate("s_9");
+  ASSERT_TRUE(id.has_value());
+
+  const std::string json = ToJson(SessionUpdatedEvent{
+      .summary =
+          vibe::service::SessionSummary{
+              .id = *id,
+              .provider = vibe::session::ProviderType::Codex,
+              .workspace_root = "/tmp/project",
+              .title = "demo",
+              .status = vibe::session::SessionStatus::Running,
+          },
+  });
+
+  EXPECT_NE(json.find("\"type\":\"session.updated\""), std::string::npos);
+  EXPECT_NE(json.find("\"sessionId\":\"s_9\""), std::string::npos);
+  EXPECT_NE(json.find("\"status\":\"Running\""), std::string::npos);
+}
+
+TEST(HttpJsonTest, SerializesSessionExitedEvent) {
+  const std::string json = ToJson(SessionExitedEvent{
+      .session_id = "s_9",
+      .status = vibe::session::SessionStatus::Exited,
+  });
+
+  EXPECT_NE(json.find("\"type\":\"session.exited\""), std::string::npos);
+  EXPECT_NE(json.find("\"sessionId\":\"s_9\""), std::string::npos);
+  EXPECT_NE(json.find("\"status\":\"Exited\""), std::string::npos);
+}
+
 }  // namespace
 }  // namespace vibe::net
