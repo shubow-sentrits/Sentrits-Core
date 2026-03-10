@@ -11,7 +11,7 @@
 namespace vibe::net {
 namespace {
 
-auto MakeManager() -> vibe::service::SessionManager { return {}; }
+auto MakeManager() -> vibe::service::SessionManager { return vibe::service::SessionManager(); }
 
 class FakeAuthorizer final : public vibe::auth::Authorizer {
  public:
