@@ -4,16 +4,20 @@
 
 namespace vibe::session {
 
-SessionRuntime::SessionRuntime(SessionRecord record, LaunchSpec launch_spec, IPtyProcess& pty_process)
+SessionRuntime::SessionRuntime(SessionRecord record, LaunchSpec launch_spec, IPtyProcess& pty_process,
+                               const std::size_t output_buffer_capacity_bytes)
     : record_(std::move(record)),
       launch_spec_(std::move(launch_spec)),
-      pty_process_(pty_process) {}
+      pty_process_(pty_process),
+      output_buffer_(output_buffer_capacity_bytes) {}
 
 auto SessionRuntime::record() const -> const SessionRecord& { return record_; }
 
 auto SessionRuntime::launch_spec() const -> const LaunchSpec& { return launch_spec_; }
 
 auto SessionRuntime::pid() const -> std::optional<ProcessId> { return pid_; }
+
+auto SessionRuntime::output_buffer() const -> const SessionOutputBuffer& { return output_buffer_; }
 
 auto SessionRuntime::Start() -> bool {
   if (!record_.TryTransition(SessionStatus::Starting)) {
@@ -72,6 +76,34 @@ auto SessionRuntime::HandleExit(const bool clean_exit) -> bool {
 
   pid_.reset();
   return true;
+}
+
+void SessionRuntime::PollOnce(const int read_timeout_ms) {
+  if (!pid_.has_value()) {
+    return;
+  }
+
+  const ReadResult read_result = pty_process_.Read(read_timeout_ms);
+  if (!read_result.data.empty()) {
+    output_buffer_.Append(read_result.data);
+    record_.SetCurrentSequence(output_buffer_.next_sequence() - 1);
+    record_.SetRecentTerminalTail(output_buffer_.Tail(64U * 1024U).data);
+  }
+
+  if (read_result.closed) {
+    const std::optional<int> exit_code = pty_process_.PollExit();
+    if (exit_code.has_value()) {
+      const bool handled_exit = HandleExit(*exit_code == 0);
+      static_cast<void>(handled_exit);
+    }
+    return;
+  }
+
+  const std::optional<int> exit_code = pty_process_.PollExit();
+  if (exit_code.has_value()) {
+    const bool handled_exit = HandleExit(*exit_code == 0);
+    static_cast<void>(handled_exit);
+  }
 }
 
 auto SessionRuntime::IsInteractiveState() const -> bool {
