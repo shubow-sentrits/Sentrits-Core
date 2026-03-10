@@ -30,6 +30,15 @@ TEST(RequestParsingTest, ParsesControlCommands) {
   const auto request_control = ParseWebSocketCommand(R"({"type":"session.control.request"})");
   ASSERT_TRUE(request_control.has_value());
   EXPECT_TRUE(std::holds_alternative<WebSocketRequestControlCommand>(*request_control));
+  EXPECT_EQ(std::get<WebSocketRequestControlCommand>(*request_control).controller_kind,
+            vibe::session::ControllerKind::Remote);
+
+  const auto request_host_control =
+      ParseWebSocketCommand(R"({"type":"session.control.request","kind":"host"})");
+  ASSERT_TRUE(request_host_control.has_value());
+  ASSERT_TRUE(std::holds_alternative<WebSocketRequestControlCommand>(*request_host_control));
+  EXPECT_EQ(std::get<WebSocketRequestControlCommand>(*request_host_control).controller_kind,
+            vibe::session::ControllerKind::Host);
 
   const auto release_control = ParseWebSocketCommand(R"({"type":"session.control.release"})");
   ASSERT_TRUE(release_control.has_value());

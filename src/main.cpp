@@ -1,12 +1,10 @@
-#include <sys/select.h>
-#include <unistd.h>
-
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "vibe/cli/daemon_client.h"
 #include "vibe/net/http_server.h"
 #include "vibe/session/launch_spec.h"
 #include "vibe/session/posix_pty_process.h"
@@ -115,7 +113,9 @@ auto RunLocalPty(const std::vector<std::string>& command) -> int {
 void PrintUsage() {
   std::cout << "Usage:\n"
             << "  vibe-hostd serve [bind-address] [port]\n"
-            << "  vibe-hostd local-pty [command [args...]]\n";
+            << "  vibe-hostd local-pty [command [args...]]\n"
+            << "  vibe-hostd session-start [title]\n"
+            << "  vibe-hostd session-attach <session-id>\n";
 }
 
 }  // namespace
@@ -138,6 +138,28 @@ auto main(const int argc, char** argv) -> int {
       command = {"/bin/sh"};
     }
     return RunLocalPty(command);
+  }
+
+  if (argc >= 2 && std::string(argv[1]) == "session-start") {
+    const std::string title = argc >= 3 ? argv[2] : "host-session";
+    const auto session_id = vibe::cli::CreateSession(
+        vibe::cli::DaemonEndpoint{},
+        vibe::session::ProviderType::Codex,
+        std::filesystem::current_path().string(),
+        title);
+    if (!session_id.has_value()) {
+      std::cerr << "failed to create session via daemon at 127.0.0.1:8080\n";
+      return 1;
+    }
+
+    std::cerr << "session " << *session_id << " created\n";
+    return vibe::cli::AttachSession(vibe::cli::DaemonEndpoint{}, *session_id,
+                                    vibe::session::ControllerKind::Host);
+  }
+
+  if (argc >= 3 && std::string(argv[1]) == "session-attach") {
+    return vibe::cli::AttachSession(vibe::cli::DaemonEndpoint{}, argv[2],
+                                    vibe::session::ControllerKind::Host);
   }
 
   PrintUsage();

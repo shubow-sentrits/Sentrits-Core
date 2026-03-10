@@ -21,7 +21,9 @@ struct WebSocketResizeCommand {
 
 struct WebSocketStopCommand {};
 
-struct WebSocketRequestControlCommand {};
+struct WebSocketRequestControlCommand {
+  vibe::session::ControllerKind controller_kind{vibe::session::ControllerKind::Remote};
+};
 
 struct WebSocketReleaseControlCommand {};
 

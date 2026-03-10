@@ -109,7 +109,25 @@ auto ParseWebSocketCommand(const std::string& body) -> std::optional<WebSocketCo
   }
 
   if (command_type == "session.control.request") {
-    return WebSocketRequestControlCommand{};
+    vibe::session::ControllerKind controller_kind = vibe::session::ControllerKind::Remote;
+    if (const auto kind = object.if_contains("kind"); kind != nullptr) {
+      if (!kind->is_string()) {
+        return std::nullopt;
+      }
+
+      const std::string kind_value = json::value_to<std::string>(*kind);
+      if (kind_value == "host") {
+        controller_kind = vibe::session::ControllerKind::Host;
+      } else if (kind_value == "remote") {
+        controller_kind = vibe::session::ControllerKind::Remote;
+      } else {
+        return std::nullopt;
+      }
+    }
+
+    return WebSocketRequestControlCommand{
+        .controller_kind = controller_kind,
+    };
   }
 
   if (command_type == "session.control.release") {
