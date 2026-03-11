@@ -72,7 +72,7 @@ Acceptance:
 - session list and overview subscription stay accurate without manual refresh
 - attached-client counts and controller state are operationally trustworthy
 - `lastActivity` and `lastStateChange` reflect meaningful changes rather than internal polling noise
-- inactive or ended sessions can be cleared without losing active supervision state
+- ended or archived records can be cleared without losing active supervision state
 
 ### 9. Minimum Supervision Signals
 

@@ -128,11 +128,18 @@
     return new Date(unixMs).toLocaleString();
   }
 
+  function isArchivedRecord(session) {
+    return Boolean(session && (session.archivedRecord ?? session.isRecovered));
+  }
+
   function bucketSession(session) {
+    if (session.inventoryState) {
+      return session.inventoryState;
+    }
     if (session.isActive) {
       return "live";
     }
-    if (session.isRecovered) {
+    if (isArchivedRecord(session)) {
       return "archived";
     }
     return "ended";
@@ -188,7 +195,7 @@
   }
 
   function canStopSession(session) {
-    return !session.isRecovered && session.status !== "Exited" && session.status !== "Error";
+    return !isArchivedRecord(session) && session.status !== "Exited" && session.status !== "Error";
   }
 
   function makeBadge(label, tone = "neutral") {
@@ -367,8 +374,8 @@
     badges.className = "badge-row";
     badges.append(
       makeBadge(session.status, session.status === "Error" ? "danger" : "neutral"),
-      makeBadge(session.isRecovered ? "archived record" : session.isActive ? "live" : "ended",
-                session.isRecovered ? "warn" : session.isActive ? "good" : "muted"),
+      makeBadge(isArchivedRecord(session) ? "archived record" : session.isActive ? "live" : "ended",
+                isArchivedRecord(session) ? "warn" : session.isActive ? "good" : "muted"),
       makeBadge(`${session.attachedClientCount ?? sessionClients.length} client${(session.attachedClientCount ?? sessionClients.length) === 1 ? "" : "s"}`)
     );
     header.append(titleBlock, badges);
@@ -395,7 +402,7 @@
     });
 
     const stopButton = document.createElement("button");
-    stopButton.textContent = canStopSession(session) ? "Stop" : "Stopped";
+    stopButton.textContent = canStopSession(session) ? "Stop" : "Ended";
     stopButton.disabled = !canStopSession(session);
     stopButton.addEventListener("click", async () => {
       try {
@@ -423,7 +430,7 @@
     if (sessionClients.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-note";
-      empty.textContent = session.isRecovered
+      empty.textContent = isArchivedRecord(session)
         ? "Archived record only. No live clients can still be attached."
         : (session.attachedClientCount ?? 0) > 0
           ? "Refreshing attached client details..."
@@ -550,7 +557,7 @@
       meta.className = "detail-list compact";
       appendDetail(meta, "Session", `${client.sessionId} · ${client.sessionTitle || "(untitled)"}`);
       appendDetail(meta, "Session state",
-                   `${client.sessionStatus}${client.sessionIsRecovered ? " · archived" : ""}`);
+                   `${client.sessionStatus}${(client.sessionArchivedRecord ?? client.sessionIsRecovered) ? " · archived" : ""}`);
       appendDetail(meta, "Role", describeClientRole(client));
       appendDetail(meta, "Connected", formatTimestamp(client.connectedAtUnixMs));
       appendDetail(meta, "Address", client.clientAddress);
@@ -682,10 +689,10 @@
   async function clearInactiveSessions() {
     try {
       const payload = await fetchJson("/host/sessions/clear-inactive", { method: "POST" });
-      log(`cleared ${payload.removedCount ?? 0} inactive session(s)`);
+      log(`cleared ${payload.removedCount ?? 0} ended/archive record(s)`);
       await refreshSessions();
     } catch (error) {
-      log(`clear inactive failed: ${String(error)}`);
+      log(`clear ended/archive failed: ${String(error)}`);
     }
   }
 

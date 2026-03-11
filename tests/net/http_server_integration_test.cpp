@@ -383,6 +383,8 @@ TEST_F(HttpServerFixture, WebSocketSessionEndpointStreamsTerminalOutput) {
   EXPECT_NE(first_payload.find("\"activityState\":\"quiet\""), std::string::npos);
   EXPECT_NE(first_payload.find("\"supervisionState\":\"quiet\""), std::string::npos);
   EXPECT_NE(first_payload.find("\"isRecovered\":false"), std::string::npos);
+  EXPECT_NE(first_payload.find("\"archivedRecord\":false"), std::string::npos);
+  EXPECT_NE(first_payload.find("\"inventoryState\":\"live\""), std::string::npos);
 
   buffer.consume(buffer.size());
   websocket.read(buffer);

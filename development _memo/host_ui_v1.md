@@ -46,9 +46,9 @@ Use a two-column layout on desktop and a stacked layout on narrow screens.
 
 Group sessions into sections:
 
-- Active
-- Quiet
-- Stopped / Recovered
+- Live
+- Ended
+- Archived Records
 
 Each session card should show:
 
@@ -56,8 +56,9 @@ Each session card should show:
 - session id
 - provider
 - runtime status
-- supervision state
+- live / ended / archived label
 - workspace root
+- conversation id if present
 - controller state
 - attached client count
 - created time
@@ -72,7 +73,7 @@ Card actions:
 - `Attach`
 - `Files`
 - `Stop`
-- later: `Clear` only for inactive sessions if needed
+- `Clear Ended/Archived` for inventory cleanup without affecting live sessions
 
 ## Attached Client View
 
@@ -126,7 +127,8 @@ Actions:
 
 - keep it operational and dense, not decorative
 - use strong grouping and status badges
-- make active vs quiet vs stopped visually obvious
+- make live vs ended vs archived visually obvious
+- avoid calling ended sessions "stopped" in the inventory
 - keep destructive actions visually clear but not noisy
 
 ## Implementation Guidance

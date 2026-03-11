@@ -888,6 +888,8 @@ TEST(HttpSharedTest, ServesHostManagementRoutes) {
   EXPECT_NE(sessions_response.body().find("\"activityState\":\"quiet\""), std::string::npos);
   EXPECT_NE(sessions_response.body().find("\"supervisionState\":\"quiet\""), std::string::npos);
   EXPECT_NE(sessions_response.body().find("\"isRecovered\":false"), std::string::npos);
+  EXPECT_NE(sessions_response.body().find("\"archivedRecord\":false"), std::string::npos);
+  EXPECT_NE(sessions_response.body().find("\"inventoryState\":\"live\""), std::string::npos);
   EXPECT_NE(sessions_response.body().find("\"attachedClientCount\":1"), std::string::npos);
 
   HttpRequest clients_request;

@@ -47,23 +47,25 @@ Use grouped cards similar to the host UI, but slimmer.
 
 Groups:
 
-- Active
-- Quiet
-- Stopped / Recovered
+- Live
+- Ended
+- Archived Records
 
 Each card should show:
 
 - title
 - session id
 - provider
-- supervision state
 - runtime status
+- live / ended / archived label
 - controller state
+- conversation id if present
 - attached client count if available
 - last output
 - last activity
 - recent file change count
 - git branch/dirty hint
+- attention hint
 
 Primary action:
 
@@ -79,8 +81,9 @@ Sections:
 - session id
 - provider
 - status
-- supervision state
+- live / ended / archived label
 - controller state
+- conversation id if present
 
 ### Control Bar
 
@@ -101,6 +104,7 @@ Sections:
 - recent files
 - read-only file content
 - git summary
+- attention summary: needs input, remote control active, workspace changed, ended, archived
 
 This should stay secondary to session supervision, not become a file browser.
 
@@ -120,6 +124,7 @@ Do not require manual token copy/paste in the normal flow.
 - optimize for quick scanning and low confusion
 - keep the control path visible without scrolling around the page
 - surface observer vs controller state clearly
+- make attention state readable without relying on the raw event log
 - avoid noisy debug logs dominating the layout
 
 ## Implementation Guidance
