@@ -34,6 +34,7 @@ struct SessionSummary {
   vibe::session::ControllerKind controller_kind{vibe::session::ControllerKind::None};
   bool is_recovered{false};
   bool is_active{false};
+  vibe::session::SupervisionState supervision_state{vibe::session::SupervisionState::Quiet};
   std::optional<std::int64_t> created_at_unix_ms;
   std::optional<std::int64_t> last_status_at_unix_ms;
   std::optional<std::int64_t> last_output_at_unix_ms;
@@ -43,6 +44,11 @@ struct SessionSummary {
   bool git_dirty{false};
   std::string git_branch;
 };
+
+[[nodiscard]] auto InferSupervisionState(vibe::session::SessionStatus status,
+                                         std::optional<std::int64_t> last_output_at_unix_ms,
+                                         std::int64_t now_unix_ms)
+    -> vibe::session::SupervisionState;
 
 class SessionManager {
  public:
