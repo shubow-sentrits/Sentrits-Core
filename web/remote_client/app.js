@@ -29,6 +29,7 @@ const fileChipListEl = document.getElementById("file-chip-list");
 const fileMetaEl = document.getElementById("file-meta");
 const fileOutputEl = document.getElementById("file-output");
 const snapshotSignalsEl = document.getElementById("snapshot-signals");
+const sessionMonitorEl = document.getElementById("session-monitor");
 
 const saveTokenBtn = document.getElementById("save-token");
 const clearTokenBtn = document.getElementById("clear-token");
@@ -62,6 +63,7 @@ const state = {
   selectedSessionId: saved.selectedSessionId || sessionInput.value.trim() || "",
   selectedSession: null,
   selectedSnapshot: null,
+  lastMeaningfulEvent: "No live session event yet.",
   selectedFilePath: "",
   selectedFileContent: "Select a recent file to read its current content.",
   selectedFileSizeBytes: 0,
@@ -97,6 +99,51 @@ let sessionState = "unknown";
 let controllerState = "observer";
 let inputEnabled = false;
 
+function isArchivedRecord(session) {
+  return Boolean(session && (session.archivedRecord ?? session.isRecovered));
+}
+
+function inventoryState(session) {
+  if (!session) {
+    return "ended";
+  }
+  return session.inventoryState || (session.isActive ? "live" : isArchivedRecord(session) ? "archived" : "ended");
+}
+
+function attentionSummary(session, snapshot = state.selectedSnapshot) {
+  if (!session) {
+    return { label: "No session selected", tone: "muted", detail: "Pick a session from the inventory." };
+  }
+  if (session.status === "Error") {
+    return { label: "Needs review", tone: "warn", detail: "Session exited with an error." };
+  }
+  if (session.status === "Exited") {
+    return {
+      label: isArchivedRecord(session) ? "Archived record" : "Ended",
+      tone: isArchivedRecord(session) ? "warn" : "muted",
+      detail: isArchivedRecord(session)
+        ? "Historical record only. No live PTY is attached."
+        : "Runtime ended. Reconnect is not available."
+    };
+  }
+  if (session.status === "AwaitingInput") {
+    return { label: "Needs input", tone: "warn", detail: "The session is waiting for user input." };
+  }
+  if (session.controllerKind === "remote") {
+    return { label: "Remote control active", tone: "warn", detail: "A remote client currently owns terminal input." };
+  }
+  if ((snapshot?.recentFileChanges || []).length > 0) {
+    return { label: "Workspace changed", tone: "good", detail: "Recent file changes are available to inspect." };
+  }
+  if (session.gitDirty) {
+    return { label: "Git dirty", tone: "good", detail: "Workspace has uncommitted changes." };
+  }
+  if (session.isActive) {
+    return { label: "Running", tone: "good", detail: "Session is live and currently observable." };
+  }
+  return { label: "Quiet", tone: "muted", detail: "No recent output or activity was observed." };
+}
+
 function saveSettings() {
   localStorage.setItem(storageKey, JSON.stringify({
     host: hostInput.value.trim(),
@@ -116,6 +163,7 @@ function appendEvent(text) {
   const timestamp = new Date().toLocaleTimeString();
   eventsEl.textContent += `[${timestamp}] ${text}\n`;
   eventsEl.scrollTop = eventsEl.scrollHeight;
+  state.lastMeaningfulEvent = text;
 }
 
 function setStates(nextConnection, nextController, nextSession) {
@@ -209,14 +257,35 @@ function formatTimestamp(value) {
   return new Date(value).toLocaleString();
 }
 
+function formatAge(value) {
+  if (!value) {
+    return "n/a";
+  }
+  const deltaMs = Date.now() - Number(value);
+  if (!Number.isFinite(deltaMs) || deltaMs < 0) {
+    return "n/a";
+  }
+  if (deltaMs < 1000) {
+    return "just now";
+  }
+  const seconds = Math.floor(deltaMs / 1000);
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function bucketSession(session) {
-  if (session.isActive) {
-    return "live";
-  }
-  if (session.isRecovered) {
-    return "archived";
-  }
-  return "ended";
+  return inventoryState(session);
 }
 
 function badge(text, tone = "") {
@@ -277,7 +346,7 @@ function updateButtons() {
   const selectedIsLive = Boolean(selectedSession && selectedSession.isActive);
   const selectedCanStop = Boolean(
     selectedSession &&
-    !selectedSession.isRecovered &&
+    !isArchivedRecord(selectedSession) &&
     selectedSession.status !== "Exited" &&
     selectedSession.status !== "Error"
   );
@@ -476,10 +545,12 @@ function renderSessions(sessions) {
 
       const badges = document.createElement("div");
       badges.className = "badge-row";
+      const attention = attentionSummary(session);
       badges.append(
         badge(session.status || "unknown", session.status === "Error" ? "warn" : ""),
-        badge(session.isRecovered ? "archived record" : session.isActive ? "live" : "ended",
-              session.isRecovered ? "warn" : session.isActive ? "good" : "muted"),
+        badge(isArchivedRecord(session) ? "archived record" : session.isActive ? "live" : "ended",
+              isArchivedRecord(session) ? "warn" : session.isActive ? "good" : "muted"),
+        badge(attention.label, attention.tone),
         badge(describeController(session.controllerKind, session.controllerClientId),
               session.controllerKind === "remote" ? "warn" : "muted"),
         badge(`${session.attachedClientCount ?? 0} clients`)
@@ -518,6 +589,7 @@ function renderSelectedSession() {
     selectedSessionTitleEl.textContent = "No session selected";
     selectedSessionSubtitleEl.textContent = "Pick a session from the inventory to load details.";
     snapshotSignalsEl.innerHTML = "";
+    sessionMonitorEl.innerHTML = "";
     fileChipListEl.innerHTML = '<div class="empty-note">Select a session to inspect recent file changes.</div>';
     fileMetaEl.innerHTML = "";
     fileOutputEl.textContent = "Select a recent file to read its current content.";
@@ -528,11 +600,13 @@ function renderSelectedSession() {
   selectedSessionTitleEl.textContent = session.title || "(untitled)";
   selectedSessionSubtitleEl.textContent =
     `${session.sessionId} · ${session.provider} · ${session.workspaceRoot || "no workspace"}`;
+  const attention = attentionSummary(session);
   selectedSessionBadgesEl.append(
     badge(session.status || "unknown", session.status === "Error" ? "warn" : ""),
-    badge(session.isRecovered ? "archived record" : session.isActive ? "live" : "ended",
-          session.isRecovered ? "warn" : session.isActive ? "good" : "muted"),
+    badge(isArchivedRecord(session) ? "archived record" : session.isActive ? "live" : "ended",
+          isArchivedRecord(session) ? "warn" : session.isActive ? "good" : "muted"),
     ...(session.isActive ? [badge(session.supervisionState || "quiet")] : []),
+    badge(attention.label, attention.tone),
     badge(describeController(session.controllerKind, session.controllerClientId),
           session.controllerKind === "remote" ? "warn" : "muted")
   );
@@ -554,12 +628,24 @@ function renderSelectedSession() {
 function renderSnapshotDetails() {
   const snapshot = state.selectedSnapshot;
   snapshotSignalsEl.innerHTML = "";
+  sessionMonitorEl.innerHTML = "";
 
   if (!snapshot) {
+    const attention = attentionSummary(state.selectedSession, null);
     snapshotSignalsEl.append(
       metaCell("Recent Files", "not loaded"),
       metaCell("Sequence", "n/a"),
       metaCell("Tail", "load a session")
+    );
+    sessionMonitorEl.append(
+      metaCell("Attention", attention.label),
+      metaCell("Attention Detail", attention.detail),
+      metaCell("Last Event", state.lastMeaningfulEvent),
+      metaCell("Last Output Age", state.selectedSession ? formatAge(state.selectedSession.lastOutputAtUnixMs) : "n/a"),
+      metaCell("Last Activity Age", state.selectedSession ? formatAge(state.selectedSession.lastActivityAtUnixMs) : "n/a"),
+      metaCell("Git Summary", state.selectedSession
+        ? `${state.selectedSession.gitDirty ? "dirty" : "clean"} ${state.selectedSession.gitBranch || ""}`.trim()
+        : "n/a")
     );
     return;
   }
@@ -572,6 +658,22 @@ function renderSnapshotDetails() {
     metaCell("Controller", state.selectedSession
       ? describeController(state.selectedSession.controllerKind, state.selectedSession.controllerClientId)
       : "unknown")
+  );
+  const git = snapshot.git || {};
+  const gitSummary = [
+    git.branch || "no-branch",
+    `${git.modifiedCount ?? 0} modified`,
+    `${git.stagedCount ?? 0} staged`,
+    `${git.untrackedCount ?? 0} untracked`
+  ].join(" | ");
+  const attention = attentionSummary(state.selectedSession, snapshot);
+  sessionMonitorEl.append(
+    metaCell("Attention", attention.label),
+    metaCell("Attention Detail", attention.detail),
+    metaCell("Last Event", state.lastMeaningfulEvent),
+    metaCell("Last Output Age", state.selectedSession ? formatAge(state.selectedSession.lastOutputAtUnixMs) : "n/a"),
+    metaCell("Last Activity Age", state.selectedSession ? formatAge(state.selectedSession.lastActivityAtUnixMs) : "n/a"),
+    metaCell("Git Summary", gitSummary)
   );
 
   fileChipListEl.innerHTML = "";
@@ -914,12 +1016,40 @@ function connect() {
           updated.status = payload.status || updated.status;
           updated.controllerKind = payload.controllerKind || updated.controllerKind;
           updated.controllerClientId = payload.controllerClientId || updated.controllerClientId;
+          updated.isActive = payload.isActive ?? updated.isActive;
+          updated.archivedRecord = payload.archivedRecord ?? updated.archivedRecord;
+          updated.inventoryState = payload.inventoryState || updated.inventoryState;
+          updated.supervisionState = payload.supervisionState || updated.supervisionState;
+          updated.lastStatusAtUnixMs = payload.lastStatusAtUnixMs ?? updated.lastStatusAtUnixMs;
+          updated.lastOutputAtUnixMs = payload.lastOutputAtUnixMs ?? updated.lastOutputAtUnixMs;
+          updated.lastActivityAtUnixMs = payload.lastActivityAtUnixMs ?? updated.lastActivityAtUnixMs;
+          updated.currentSequence = payload.currentSequence ?? updated.currentSequence;
+          updated.recentFileChangeCount = payload.recentFileChangeCount ?? updated.recentFileChangeCount;
+          updated.gitDirty = payload.gitDirty ?? updated.gitDirty;
+          updated.gitBranch = payload.gitBranch ?? updated.gitBranch;
+          updated.attachedClientCount = payload.attachedClientCount ?? updated.attachedClientCount;
           if (updated.sessionId === state.selectedSessionId) {
             state.selectedSession = updated;
             renderSelectedSession();
           }
         }
       } else if (payload.type === "session.activity") {
+        const updated = state.sessions.find((session) => session.sessionId === payload.sessionId);
+        if (updated) {
+          updated.isActive = payload.isActive ?? updated.isActive;
+          updated.supervisionState = payload.supervisionState || updated.supervisionState;
+          updated.lastOutputAtUnixMs = payload.lastOutputAtUnixMs ?? updated.lastOutputAtUnixMs;
+          updated.lastActivityAtUnixMs = payload.lastActivityAtUnixMs ?? updated.lastActivityAtUnixMs;
+          updated.currentSequence = payload.currentSequence ?? updated.currentSequence;
+          updated.recentFileChangeCount = payload.recentFileChangeCount ?? updated.recentFileChangeCount;
+          updated.gitDirty = payload.gitDirty ?? updated.gitDirty;
+          updated.gitBranch = payload.gitBranch ?? updated.gitBranch;
+          updated.attachedClientCount = payload.attachedClientCount ?? updated.attachedClientCount;
+          if (updated.sessionId === state.selectedSessionId) {
+            state.selectedSession = updated;
+            renderSelectedSession();
+          }
+        }
         appendEvent(`activity: ${payload.activityState || "unknown"} | seq=${payload.currentSequence ?? 0} | files=${payload.recentFileChangeCount ?? 0} | git=${payload.gitDirty ? "dirty" : "clean"}:${payload.gitBranch || "-"}`);
         await loadSelectedSnapshot();
       } else if (payload.type === "session.exited") {
@@ -929,6 +1059,7 @@ function connect() {
         if (updated) {
           updated.status = payload.status || "Exited";
           updated.isActive = false;
+          updated.inventoryState = isArchivedRecord(updated) ? "archived" : "ended";
           state.selectedSession = updated;
           renderSelectedSession();
         }

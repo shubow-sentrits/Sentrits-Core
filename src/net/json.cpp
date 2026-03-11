@@ -29,6 +29,16 @@ auto ToActivityState(const vibe::service::SessionSummary& summary) -> const char
   return vibe::session::ToString(summary.supervision_state).data();
 }
 
+auto ToInventoryState(const vibe::service::SessionSummary& summary) -> const char* {
+  if (summary.is_active) {
+    return "live";
+  }
+  if (summary.is_recovered) {
+    return "archived";
+  }
+  return "ended";
+}
+
 }  // namespace
 
 auto JsonEscape(const std::string_view input) -> std::string {
@@ -84,7 +94,9 @@ auto ToJson(const vibe::service::SessionSummary& summary) -> std::string {
   }
   object["controllerKind"] = std::string(vibe::session::ToString(summary.controller_kind));
   object["isRecovered"] = summary.is_recovered;
+  object["archivedRecord"] = summary.is_recovered;
   object["isActive"] = summary.is_active;
+  object["inventoryState"] = ToInventoryState(summary);
   object["activityState"] = ToActivityState(summary);
   object["supervisionState"] = std::string(vibe::session::ToString(summary.supervision_state));
   if (summary.created_at_unix_ms.has_value()) {
@@ -216,6 +228,7 @@ auto ToJson(const vibe::net::AttachedClientInfo& info) -> std::string {
   object["sessionTitle"] = info.session_title;
   object["sessionStatus"] = std::string(vibe::session::ToString(info.session_status));
   object["sessionIsRecovered"] = info.session_is_recovered;
+  object["sessionArchivedRecord"] = info.session_is_recovered;
   object["clientAddress"] = info.client_address;
   object["claimedKind"] = std::string(vibe::session::ToString(info.claimed_kind));
   object["isLocal"] = info.is_local;
@@ -261,7 +274,9 @@ auto ToJson(const SessionUpdatedEvent& event) -> std::string {
   }
   object["controllerKind"] = std::string(vibe::session::ToString(event.summary.controller_kind));
   object["isRecovered"] = event.summary.is_recovered;
+  object["archivedRecord"] = event.summary.is_recovered;
   object["isActive"] = event.summary.is_active;
+  object["inventoryState"] = ToInventoryState(event.summary);
   object["activityState"] = ToActivityState(event.summary);
   object["supervisionState"] = std::string(vibe::session::ToString(event.summary.supervision_state));
   if (event.summary.created_at_unix_ms.has_value()) {

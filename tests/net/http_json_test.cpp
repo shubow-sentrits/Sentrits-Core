@@ -53,6 +53,8 @@ TEST(HttpJsonTest, SerializesSessionSummaryControllerFields) {
 
   EXPECT_NE(json.find("\"controllerKind\":\"host\""), std::string::npos);
   EXPECT_NE(json.find("\"conversationId\":\"conv_hash_1\""), std::string::npos);
+  EXPECT_NE(json.find("\"archivedRecord\":false"), std::string::npos);
+  EXPECT_NE(json.find("\"inventoryState\":\"live\""), std::string::npos);
   EXPECT_NE(json.find("\"activityState\":\"active\""), std::string::npos);
   EXPECT_NE(json.find("\"supervisionState\":\"active\""), std::string::npos);
   EXPECT_NE(json.find("\"createdAtUnixMs\":100"), std::string::npos);
@@ -207,6 +209,8 @@ TEST(HttpJsonTest, SerializesSessionUpdatedEvent) {
   EXPECT_NE(json.find("\"status\":\"Running\""), std::string::npos);
   EXPECT_NE(json.find("\"controllerClientId\":\"client-1\""), std::string::npos);
   EXPECT_NE(json.find("\"controllerKind\":\"remote\""), std::string::npos);
+  EXPECT_NE(json.find("\"archivedRecord\":false"), std::string::npos);
+  EXPECT_NE(json.find("\"inventoryState\":\"live\""), std::string::npos);
   EXPECT_NE(json.find("\"activityState\":\"active\""), std::string::npos);
   EXPECT_NE(json.find("\"supervisionState\":\"active\""), std::string::npos);
   EXPECT_NE(json.find("\"createdAtUnixMs\":100"), std::string::npos);
@@ -329,6 +333,8 @@ TEST(HttpJsonTest, SerializesSessionInventoryEvent) {
   EXPECT_NE(json.find("\"type\":\"sessions.snapshot\""), std::string::npos);
   EXPECT_NE(json.find("\"sessionId\":\"s_1\""), std::string::npos);
   EXPECT_NE(json.find("\"sessionId\":\"s_2\""), std::string::npos);
+  EXPECT_NE(json.find("\"inventoryState\":\"live\""), std::string::npos);
+  EXPECT_NE(json.find("\"inventoryState\":\"archived\""), std::string::npos);
 }
 
 TEST(HttpJsonTest, SerializesErrorEvent) {
@@ -362,6 +368,7 @@ TEST(HttpJsonTest, SerializesAttachedClientInfo) {
   EXPECT_NE(json.find("\"sessionId\":\"s_1\""), std::string::npos);
   EXPECT_NE(json.find("\"sessionTitle\":\"demo\""), std::string::npos);
   EXPECT_NE(json.find("\"sessionStatus\":\"Running\""), std::string::npos);
+  EXPECT_NE(json.find("\"sessionArchivedRecord\":false"), std::string::npos);
   EXPECT_NE(json.find("\"claimedKind\":\"remote\""), std::string::npos);
   EXPECT_NE(json.find("\"hasControl\":true"), std::string::npos);
   EXPECT_NE(json.find("\"connectedAtUnixMs\":300"), std::string::npos);
