@@ -53,6 +53,12 @@ class FakePairingService final : public vibe::auth::PairingService {
     };
   }
 
+  [[nodiscard]] auto GetPairingClaimStatus(const std::string& /*pairing_id*/,
+                                           const std::string& /*code*/) const
+      -> vibe::auth::PairingClaimStatus override {
+    return vibe::auth::PairingClaimStatus::Approved;
+  }
+
   [[nodiscard]] auto RejectPairing(const std::string& /*pairing_id*/) -> bool override { return true; }
 };
 

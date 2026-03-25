@@ -33,6 +33,9 @@ class DefaultPairingService final : public PairingService {
       -> std::optional<PairingRecord> override;
   [[nodiscard]] auto ClaimApprovedPairing(const std::string& pairing_id, const std::string& code)
       -> std::optional<PairingRecord> override;
+  [[nodiscard]] auto GetPairingClaimStatus(const std::string& pairing_id,
+                                           const std::string& code) const
+      -> PairingClaimStatus override;
   [[nodiscard]] auto RejectPairing(const std::string& pairing_id) -> bool override;
 
  private:
@@ -49,6 +52,7 @@ class DefaultPairingService final : public PairingService {
   StringGenerator token_generator_;
   DurationMs pairing_request_ttl_ms_{10 * 60 * 1000};
   std::unordered_map<std::string, ApprovedClaim> approved_claims_;
+  std::unordered_map<std::string, std::int64_t> rejected_claims_;
 };
 
 }  // namespace vibe::auth

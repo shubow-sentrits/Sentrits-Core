@@ -189,6 +189,7 @@ auto DefaultPairingService::ApprovePairing(const std::string& pairing_id, const 
       .code = code,
       .record = record,
   };
+  rejected_claims_.erase(pairing_id);
   return record;
 }
 
@@ -202,8 +203,37 @@ auto DefaultPairingService::ClaimApprovedPairing(const std::string& pairing_id, 
   return it->second.record;
 }
 
+auto DefaultPairingService::GetPairingClaimStatus(const std::string& pairing_id,
+                                                  const std::string& code) const
+    -> PairingClaimStatus {
+  if (const auto approved_it = approved_claims_.find(pairing_id); approved_it != approved_claims_.end()) {
+    return approved_it->second.code == code ? PairingClaimStatus::Approved
+                                            : PairingClaimStatus::Rejected;
+  }
+
+  if (rejected_claims_.find(pairing_id) != rejected_claims_.end()) {
+    return PairingClaimStatus::Rejected;
+  }
+
+  const auto now_ms = timestamp_provider_();
+  const auto pending_pairings = pairing_store_.LoadPendingPairings();
+  const auto pending_it =
+      std::find_if(pending_pairings.begin(), pending_pairings.end(),
+                   [&](const PairingRequest& pending) { return pending.pairing_id == pairing_id; });
+  if (pending_it == pending_pairings.end()) {
+    return PairingClaimStatus::Rejected;
+  }
+
+  if (IsExpired(*pending_it, now_ms, pairing_request_ttl_ms_)) {
+    return PairingClaimStatus::Expired;
+  }
+
+  return pending_it->code == code ? PairingClaimStatus::Pending : PairingClaimStatus::Rejected;
+}
+
 auto DefaultPairingService::RejectPairing(const std::string& pairing_id) -> bool {
   approved_claims_.erase(pairing_id);
+  rejected_claims_[pairing_id] = timestamp_provider_();
   return pairing_store_.RemovePendingPairing(pairing_id);
 }
 
