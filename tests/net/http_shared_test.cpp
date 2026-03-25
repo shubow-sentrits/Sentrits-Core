@@ -101,13 +101,32 @@ class FakePairingService final : public vibe::auth::PairingService {
     return approved_record;
   }
 
+  [[nodiscard]] auto GetPairingClaimStatus(const std::string& pairing_id,
+                                           const std::string& code) const
+      -> vibe::auth::PairingClaimStatus override {
+    if (approved_record.has_value() && pairing_id == "p_1" && code == "123456") {
+      return vibe::auth::PairingClaimStatus::Approved;
+    }
+    if (rejected_pairing_id == pairing_id) {
+      return vibe::auth::PairingClaimStatus::Rejected;
+    }
+    for (const auto& pending : pending_pairings) {
+      if (pending.pairing_id == pairing_id && pending.code == code) {
+        return vibe::auth::PairingClaimStatus::Pending;
+      }
+    }
+    return vibe::auth::PairingClaimStatus::Rejected;
+  }
+
   [[nodiscard]] auto RejectPairing(const std::string& pairing_id) -> bool override {
     pending_pairings.clear();
+    rejected_pairing_id = pairing_id;
     return pairing_id == "p_1";
   }
 
   mutable std::vector<vibe::auth::PairingRequest> pending_pairings;
   std::optional<vibe::auth::PairingRecord> approved_record;
+  std::string rejected_pairing_id;
 };
 
 class FakePairingStore final : public vibe::store::PairingStore {
@@ -924,6 +943,48 @@ TEST(HttpSharedTest, ServesLocalUiAndPairingRoutes) {
   EXPECT_NE(claim_response.body().find("\"token\":\"good-token\""), std::string::npos);
 }
 
+TEST(HttpSharedTest, PairingClaimReturnsRejectedAfterHostRejectsRequest) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  FakeHostAdmin host_admin;
+
+  HttpRequest start_pairing_request;
+  start_pairing_request.method(http::verb::post);
+  start_pairing_request.target("/pairing/request");
+  start_pairing_request.version(11);
+  start_pairing_request.body() = R"({"deviceName":"browser","deviceType":"browser"})";
+  start_pairing_request.prepare_payload();
+  const HttpResponse start_pairing_response =
+      HandleRequest(start_pairing_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
+  ASSERT_EQ(start_pairing_response.result(), http::status::created);
+
+  HttpRequest reject_request;
+  reject_request.method(http::verb::post);
+  reject_request.target("/pairing/reject");
+  reject_request.version(11);
+  reject_request.body() = R"({"pairingId":"p_1","code":"123456"})";
+  reject_request.prepare_payload();
+  const HttpResponse reject_response =
+      HandleRequest(reject_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
+  ASSERT_EQ(reject_response.result(), http::status::ok);
+
+  HttpRequest claim_request;
+  claim_request.method(http::verb::post);
+  claim_request.target("/pairing/claim");
+  claim_request.version(11);
+  claim_request.body() = R"({"pairingId":"p_1","code":"123456"})";
+  claim_request.prepare_payload();
+  const HttpResponse claim_response =
+      HandleRequest(claim_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
+  EXPECT_EQ(claim_response.result(), http::status::ok);
+  EXPECT_NE(claim_response.body().find("\"status\":\"rejected\""), std::string::npos);
+}
+
 TEST(HttpSharedTest, ServesRemoteClientUiFromRemoteListener) {
   auto session_manager = MakeManager();
   FakeAuthorizer authorizer;
@@ -1127,6 +1188,48 @@ TEST(HttpSharedTest, ServesHostTrustedDeviceRoutesAndLocalSessionCreation) {
   EXPECT_EQ(revoke_response.result(), http::status::ok);
   EXPECT_EQ(pairing_store.LoadApprovedPairings().size(), 1U);
   EXPECT_EQ(pairing_store.LoadApprovedPairings()[0].device_id.value, "device_b");
+}
+
+TEST(HttpSharedTest, RemoteAuthorizedClientCanClearInactiveSessions) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  FakeHostAdmin host_admin;
+
+  const auto created =
+      session_manager.CreateSession(vibe::service::CreateSessionRequest{
+          .provider = vibe::session::ProviderType::Codex,
+          .workspace_root = std::filesystem::current_path().string(),
+          .title = "ended",
+          .conversation_id = std::nullopt,
+          .command_argv = std::nullopt,
+          .group_tags = {},
+      });
+  ASSERT_TRUE(created.has_value());
+  ASSERT_TRUE(session_manager.StopSession(created->id.value()));
+
+  HttpRequest clear_request;
+  clear_request.method(http::verb::post);
+  clear_request.target("/sessions/clear-inactive");
+  clear_request.version(11);
+  clear_request.set(http::field::authorization, "Bearer good-token");
+  const HttpResponse clear_response =
+      HandleRequest(clear_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
+  EXPECT_EQ(clear_response.result(), http::status::ok);
+  EXPECT_NE(clear_response.body().find("\"removedCount\":1"), std::string::npos);
+
+  HttpRequest sessions_request;
+  sessions_request.method(http::verb::get);
+  sessions_request.target("/sessions");
+  sessions_request.version(11);
+  sessions_request.set(http::field::authorization, "Bearer good-token");
+  const HttpResponse sessions_response =
+      HandleRequest(sessions_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
+  EXPECT_EQ(sessions_response.result(), http::status::ok);
+  EXPECT_EQ(sessions_response.body(), "[]");
 }
 
 TEST(HttpSharedTest, SavesExpandedHostConfig) {

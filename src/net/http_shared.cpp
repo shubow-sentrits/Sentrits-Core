@@ -333,6 +333,32 @@ auto HandlePairingApprove(const HttpRequest& request, const HttpRouteContext& co
   return MakeJsonResponse(request, http::status::ok, ToJson(*pairing_record));
 }
 
+auto HandlePairingReject(const HttpRequest& request, const HttpRouteContext& context) -> HttpResponse {
+  if (const auto auth_response =
+          RequireLocalAuthorization(request, context, vibe::auth::AuthorizationAction::ApprovePairing);
+      auth_response.has_value()) {
+    return *auth_response;
+  }
+
+  if (context.pairing_service == nullptr) {
+    return MakeJsonResponse(request, http::status::service_unavailable,
+                            "{\"error\":\"pairing service unavailable\"}");
+  }
+
+  const auto parsed_request = ParsePairingApprovalRequest(request.body());
+  if (!parsed_request.has_value()) {
+    return MakeJsonResponse(request, http::status::bad_request,
+                            "{\"error\":\"invalid pairing decision request\"}");
+  }
+
+  if (!context.pairing_service->RejectPairing(parsed_request->pairing_id)) {
+    return MakeJsonResponse(request, http::status::not_found,
+                            "{\"error\":\"pairing request not found\"}");
+  }
+
+  return MakeJsonResponse(request, http::status::ok, "{\"status\":\"rejected\"}");
+}
+
 auto HandlePairingClaim(const HttpRequest& request, const HttpRouteContext& context) -> HttpResponse {
   if (context.pairing_service == nullptr) {
     return MakeJsonResponse(request, http::status::service_unavailable,
@@ -348,6 +374,14 @@ auto HandlePairingClaim(const HttpRequest& request, const HttpRouteContext& cont
   const auto pairing_record =
       context.pairing_service->ClaimApprovedPairing(parsed_request->pairing_id, parsed_request->code);
   if (!pairing_record.has_value()) {
+    const auto claim_status =
+        context.pairing_service->GetPairingClaimStatus(parsed_request->pairing_id, parsed_request->code);
+    if (claim_status == vibe::auth::PairingClaimStatus::Rejected) {
+      return MakeJsonResponse(request, http::status::ok, "{\"status\":\"rejected\"}");
+    }
+    if (claim_status == vibe::auth::PairingClaimStatus::Expired) {
+      return MakeJsonResponse(request, http::status::ok, "{\"status\":\"expired\"}");
+    }
     return MakeJsonResponse(request, http::status::accepted,
                             "{\"status\":\"pending\"}");
   }
@@ -705,6 +739,10 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
     return HandlePairingApprove(request, context);
   }
 
+  if (request.method() == http::verb::post && request.target() == "/pairing/reject") {
+    return HandlePairingReject(request, context);
+  }
+
   if (request.method() == http::verb::post && request.target() == "/pairing/claim") {
     return HandlePairingClaim(request, context);
   }
@@ -874,6 +912,18 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
       return *auth_response;
     }
     return HandleCreateSessionRequest(request, session_manager, context);
+  }
+
+  if (request.method() == http::verb::post && request.target() == "/sessions/clear-inactive") {
+    if (const auto auth_response =
+            RequireAuthorization(request, context, vibe::auth::AuthorizationAction::ControlSession);
+        auth_response.has_value()) {
+      return *auth_response;
+    }
+
+    const auto removed_count = session_manager.ClearInactiveSessions();
+    return MakeJsonResponse(request, http::status::ok,
+                            "{\"removedCount\":" + std::to_string(removed_count) + "}");
   }
 
   const std::string target(request.target());

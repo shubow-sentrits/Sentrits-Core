@@ -41,6 +41,13 @@ struct PairingRecord {
   [[nodiscard]] auto operator==(const PairingRecord& other) const -> bool = default;
 };
 
+enum class PairingClaimStatus {
+  Pending,
+  Approved,
+  Rejected,
+  Expired,
+};
+
 class PairingService {
  public:
   virtual ~PairingService() = default;
@@ -52,6 +59,9 @@ class PairingService {
       -> std::optional<PairingRecord> = 0;
   [[nodiscard]] virtual auto ClaimApprovedPairing(const std::string& pairing_id, const std::string& code)
       -> std::optional<PairingRecord> = 0;
+  [[nodiscard]] virtual auto GetPairingClaimStatus(const std::string& pairing_id,
+                                                   const std::string& code) const
+      -> PairingClaimStatus = 0;
   [[nodiscard]] virtual auto RejectPairing(const std::string& pairing_id) -> bool = 0;
 };
 
