@@ -7,6 +7,8 @@ Current runtime target:
 - macOS and Linux only
 - PTY-backed session execution currently uses a shared POSIX `forkpty` backend behind an `IPtyProcess` factory seam
 - file watching and process-tree/resource inspection are still planned seams, not completed Linux-ready subsystems
+- host-local `session-start` and `session-attach` now use a privileged low-latency controller stream
+- remote web and mobile clients still use the HTTP and WebSocket observer/control API
 
 Start here:
 

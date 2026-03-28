@@ -18,7 +18,12 @@ The host is the owner of session execution and observation. Clients are subscrib
 
 There is one PTY per session. The PTY belongs to the session runtime, not to any specific UI surface.
 
-The host-side terminal should eventually attach through the same daemon-managed session protocol as any remote client, usually as the initial controller.
+The host-side terminal still participates in daemon-managed session control, but it no longer uses the same delivery lane as observers.
+
+The runtime now has two distinct transport shapes:
+
+- a privileged local controller lane for host `session-start` and `session-attach`
+- an observer-oriented HTTP and WebSocket lane for browsers, mobile clients, and passive host views
 
 The terminal path is important, but it is not the whole product. The daemon is a supervision-oriented session runtime and control plane, not merely a PTY forwarder.
 
@@ -92,6 +97,16 @@ Responsibilities:
 - isolate client backpressure from PTY reading
 - broadcast controller changes to observers
 - support both per-session streams and host-wide inventory subscriptions
+
+### LocalControllerStream
+
+Responsibilities:
+
+- provide the active host controller with a low-latency full-duplex PTY bridge
+- forward raw terminal input and resize requests without observer-oriented framing
+- forward live PTY bytes back to the active host controller immediately
+- claim and release controller ownership for the local host attach path
+- stay isolated from observer replay, batching, and degradation rules
 
 ### SnapshotStore
 
@@ -193,6 +208,7 @@ Recommended first implementation:
 - one PTY reader task or thread per active session
 - bounded queues or direct append path into `SessionOutputBuffer`
 - dispatcher work scheduled independently from PTY reads
+- the privileged local controller lane must not compete with observer maintenance polling for the same session
 
 This gives a clean separation between high-priority PTY ingestion and comparatively lower-priority client delivery.
 
@@ -208,6 +224,13 @@ Recommended product rule:
 - host may explicitly reclaim control
 
 This rule keeps PTY semantics correct because the provider process only ever sees one terminal size at a time.
+
+Implementation refinement:
+
+- the active local host controller is privileged
+- its input and return output should be treated as one full-duplex control lane
+- observers attached to the same session still receive replayable session events and terminal output through the observer dispatcher
+- observer batching, replay, and degradation logic must not sit in front of the active controller
 
 ## Platform Abstractions
 

@@ -6,6 +6,12 @@ This document translates the initiative API into a more implementation-ready con
 
 All non-health endpoints should be designed to support bearer-token authorization in the MVP.
 
+Internal note:
+
+- the public remote API remains HTTP plus WebSocket on the remote listener
+- host-local `session-start` and `session-attach` now use an internal privileged controller stream for low-latency control
+- that local controller stream is daemon-private and is not part of the web or mobile client contract
+
 ## Discovery Endpoints
 
 These are additive to the current remote API and support client-side device discovery.
@@ -267,6 +273,10 @@ Carries final exit code or error reason.
 ## WebSocket Commands
 
 These are client-to-server messages over the attached session WebSocket.
+
+Remote clients should continue using JSON text commands.
+
+The daemon may also accept binary input frames for raw host-controller attach flows, but that is an implementation detail of the host attach path, not a required public client contract.
 
 ### `terminal.input`
 
