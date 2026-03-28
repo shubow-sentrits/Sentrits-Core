@@ -236,6 +236,31 @@ auto MakeWebSocketAuthResponse(const HttpRequest& request, const http::status st
   return response;
 }
 
+auto MakeControllerReadyEvent(const std::string& session_id) -> std::string {
+  json::object object;
+  object["type"] = "controller.ready";
+  object["sessionId"] = session_id;
+  object["controllerKind"] = "remote";
+  return json::serialize(object);
+}
+
+auto MakeControllerRejectedEvent(const std::string& session_id, const std::string& code,
+                                 const std::string& message) -> std::string {
+  json::object object;
+  object["type"] = "controller.rejected";
+  object["sessionId"] = session_id;
+  object["code"] = code;
+  object["message"] = message;
+  return json::serialize(object);
+}
+
+auto MakeControllerReleasedEvent(const std::string& session_id) -> std::string {
+  json::object object;
+  object["type"] = "controller.released";
+  object["sessionId"] = session_id;
+  return json::serialize(object);
+}
+
 void PruneRegistry(WebSocketRegistry& websocket_registry) {
   for (auto registry_it = websocket_registry.begin(); registry_it != websocket_registry.end();) {
     auto& sessions = registry_it->second;
@@ -850,6 +875,369 @@ class WebSocketSession final : public WebSocketSessionBase,
   std::int64_t connected_at_unix_ms_{0};
 };
 
+template <typename Stream>
+class RemoteControllerWebSocketSession final
+    : public WebSocketSessionBase,
+      public std::enable_shared_from_this<RemoteControllerWebSocketSession<Stream>> {
+ public:
+  ~RemoteControllerWebSocketSession() { ReleaseControlIfHeld(); }
+
+  RemoteControllerWebSocketSession(Stream&& stream, vibe::service::SessionManager& session_manager,
+                                   const vibe::auth::Authorizer& authorizer,
+                                   std::shared_ptr<WebSocketRegistry> websocket_registry,
+                                   const std::string& client_address, const bool is_local_request,
+                                   const ListenerRole listener_role)
+      : websocket_(std::forward<Stream>(stream)),
+        session_manager_(session_manager),
+        authorizer_(authorizer),
+        websocket_registry_(std::move(websocket_registry)),
+        client_address_(client_address),
+        is_local_request_(is_local_request),
+        listener_role_(listener_role) {}
+
+  void Start(HttpRequest request) override {
+    target_ = std::string(request.target());
+    session_id_ = ExtractSessionIdFromWebSocketTarget(target_);
+    const auto auth_result = authorizer_.Authorize(
+        vibe::auth::RequestContext{
+            .bearer_token = ExtractBearerToken(request),
+            .client_address = client_address_,
+            .target = target_,
+            .is_websocket = true,
+            .is_local_request = is_local_request_,
+        },
+        vibe::auth::AuthorizationAction::ControlSession);
+    if (!auth_result.authorized) {
+      beast::error_code error_code;
+      http::write(websocket_.next_layer(),
+                  MakeWebSocketAuthResponse(
+                      request, auth_result.authenticated ? http::status::forbidden
+                                                         : http::status::unauthorized,
+                      auth_result.reason.empty() ? "request rejected" : auth_result.reason),
+                  error_code);
+      return;
+    }
+
+    websocket_.async_accept(
+        request,
+        [self = this->shared_from_this()](const boost::system::error_code& error_code) {
+          if (error_code) {
+            return;
+          }
+
+          self->client_id_ = "remote-controller-" + std::to_string(CurrentUnixTimeMs()) + "-" +
+                             std::to_string(reinterpret_cast<std::uintptr_t>(self.get()));
+          self->connected_at_unix_ms_ = CurrentUnixTimeMs();
+          boost::system::error_code socket_error;
+          beast::get_lowest_layer(self->websocket_).set_option(tcp::no_delay(true), socket_error);
+          if (socket_error) {
+            self->ForceClose();
+            return;
+          }
+
+          const auto summary = self->session_manager_.GetSession(self->session_id_);
+          if (!summary.has_value()) {
+            self->QueueTextFrame(
+                MakeControllerRejectedEvent(self->session_id_, "session_not_found", "session not found"));
+            self->close_after_writes_ = true;
+            return;
+          }
+
+          if (!self->session_manager_.RequestControl(self->session_id_, self->client_id_,
+                                                     vibe::session::ControllerKind::Remote)) {
+            self->QueueTextFrame(MakeControllerRejectedEvent(
+                self->session_id_, "control_unavailable", "session already has an active controller"));
+            self->close_after_writes_ = true;
+            return;
+          }
+
+          self->has_control_ = true;
+          (*self->websocket_registry_)[self->session_id_].push_back(self);
+          self->next_output_sequence_ = summary->current_sequence + 1;
+          self->QueueTextFrame(MakeControllerReadyEvent(self->session_id_));
+          self->DoRead();
+          self->SyncReadableDescriptor();
+          self->ArmReadableWait();
+        });
+  }
+
+  void SendPendingOutput() override {
+    if (closed_ || session_id_.empty()) {
+      return;
+    }
+
+    const auto summary = session_manager_.GetSession(session_id_);
+    if (!summary.has_value()) {
+      close_after_writes_ = true;
+      if (!write_in_progress_) {
+        ForceClose();
+      }
+      return;
+    }
+
+    if (has_control_ && !session_manager_.HasControl(session_id_, client_id_)) {
+      has_control_ = false;
+      QueueTextFrame(MakeControllerReleasedEvent(session_id_));
+      close_after_writes_ = true;
+      return;
+    }
+
+    if (!exit_event_sent_ &&
+        (summary->status == vibe::session::SessionStatus::Exited ||
+         summary->status == vibe::session::SessionStatus::Error)) {
+      exit_event_sent_ = true;
+      QueueTextFrame(ToJson(SessionExitedEvent{
+          .session_id = summary->id.value(),
+          .status = summary->status,
+      }));
+      close_after_writes_ = true;
+    }
+  }
+
+  [[nodiscard]] auto session_id() const -> const std::string& override { return session_id_; }
+  [[nodiscard]] auto client_id() const -> const std::string& override { return client_id_; }
+  [[nodiscard]] auto client_address() const -> const std::string& override { return client_address_; }
+  [[nodiscard]] auto is_local_request() const -> bool override { return is_local_request_; }
+  [[nodiscard]] auto claimed_kind() const -> vibe::session::ControllerKind override {
+    return vibe::session::ControllerKind::Remote;
+  }
+  [[nodiscard]] auto connected_at_unix_ms() const -> std::int64_t override {
+    return connected_at_unix_ms_;
+  }
+
+  void ForceClose() override {
+    if (closed_) {
+      return;
+    }
+
+    closed_ = true;
+    boost::system::error_code error_code;
+    if (pty_readable_) {
+      pty_readable_->cancel(error_code);
+      pty_readable_->close(error_code);
+      pty_readable_.reset();
+    }
+    beast::get_lowest_layer(websocket_).cancel(error_code);
+    error_code.clear();
+    beast::get_lowest_layer(websocket_).close(error_code);
+    ReleaseControlIfHeld();
+  }
+
+ private:
+  struct PendingFrame {
+    std::string payload;
+    bool is_text{true};
+  };
+
+  void DoRead() {
+    websocket_.async_read(
+        read_buffer_,
+        [self = this->shared_from_this()](const boost::system::error_code& error_code,
+                                          const std::size_t /*bytes_transferred*/) {
+          if (error_code) {
+            self->ForceClose();
+            return;
+          }
+
+          const std::string payload = beast::buffers_to_string(self->read_buffer_.data());
+          const bool got_text = self->websocket_.got_text();
+          self->read_buffer_.consume(self->read_buffer_.size());
+          if (got_text) {
+            self->HandleTextFrame(payload);
+          } else {
+            self->HandleBinaryFrame(payload);
+          }
+
+          if (!self->closed_) {
+            self->DoRead();
+          }
+        });
+  }
+
+  void HandleBinaryFrame(const std::string& payload) {
+    if (!has_control_ || !session_manager_.HasControl(session_id_, client_id_)) {
+      QueueTextFrame(MakeControllerReleasedEvent(session_id_));
+      close_after_writes_ = true;
+      return;
+    }
+
+    if (!session_manager_.SendInput(session_id_, payload)) {
+      close_after_writes_ = true;
+    }
+  }
+
+  void HandleTextFrame(const std::string& payload) {
+    const auto command = ParseWebSocketCommand(payload);
+    if (!command.has_value()) {
+      ForceClose();
+      return;
+    }
+
+    const bool handled = std::visit(
+        [this](const auto& value) -> bool {
+          using T = std::decay_t<decltype(value)>;
+          if constexpr (std::is_same_v<T, WebSocketResizeCommand>) {
+            return session_manager_.ResizeSession(session_id_, value.terminal_size);
+          } else if constexpr (std::is_same_v<T, WebSocketStopCommand>) {
+            return session_manager_.StopSession(session_id_);
+          } else if constexpr (std::is_same_v<T, WebSocketReleaseControlCommand>) {
+            const bool released = session_manager_.ReleaseControl(session_id_, client_id_);
+            if (released) {
+              has_control_ = false;
+              QueueTextFrame(MakeControllerReleasedEvent(session_id_));
+              close_after_writes_ = true;
+            }
+            return released;
+          }
+
+          return false;
+        },
+        *command);
+
+    if (!handled) {
+      ForceClose();
+    }
+  }
+
+  void SyncReadableDescriptor() {
+    const auto readable_fd = session_manager_.GetReadableFd(session_id_);
+    if (!readable_fd.has_value()) {
+      pty_readable_.reset();
+      return;
+    }
+
+    if (pty_readable_) {
+      return;
+    }
+
+    const int duplicated_fd = dup(*readable_fd);
+    if (duplicated_fd < 0) {
+      return;
+    }
+
+    pty_readable_ = std::make_unique<asio::posix::stream_descriptor>(websocket_.get_executor());
+    pty_readable_->assign(duplicated_fd);
+  }
+
+  void ArmReadableWait() {
+    if (!pty_readable_ || closed_) {
+      return;
+    }
+
+    pty_readable_->async_wait(
+        asio::posix::stream_descriptor::wait_read,
+        [self = this->shared_from_this()](const boost::system::error_code& error_code) {
+          if (error_code == asio::error::operation_aborted) {
+            return;
+          }
+
+          if (error_code) {
+            self->ForceClose();
+            return;
+          }
+
+          static_cast<void>(self->session_manager_.PollSession(self->session_id_, 0));
+          self->FlushOutput();
+          self->SendPendingOutput();
+
+          self->SyncReadableDescriptor();
+          if (self->pty_readable_ != nullptr && !self->closed_) {
+            self->ArmReadableWait();
+          } else if (self->close_after_writes_ && !self->write_in_progress_ &&
+                     self->pending_frames_.empty()) {
+            self->ForceClose();
+          }
+        });
+  }
+
+  void FlushOutput() {
+    const auto slice = session_manager_.GetOutputSince(session_id_, next_output_sequence_);
+    if (!slice.has_value() || slice->data.empty()) {
+      return;
+    }
+
+    next_output_sequence_ = slice->seq_end + 1;
+    QueueBinaryFrame(std::string(slice->data));
+  }
+
+  void QueueTextFrame(std::string payload) {
+    QueueFrame(std::move(payload), true);
+  }
+
+  void QueueBinaryFrame(std::string payload) {
+    QueueFrame(std::move(payload), false);
+  }
+
+  void QueueFrame(std::string payload, const bool is_text) {
+    if (payload.empty() || closed_) {
+      return;
+    }
+
+    pending_frames_.push_back(PendingFrame{
+        .payload = std::move(payload),
+        .is_text = is_text,
+    });
+    if (!write_in_progress_) {
+      DoWrite();
+    }
+  }
+
+  void DoWrite() {
+    if (pending_frames_.empty() || closed_) {
+      write_in_progress_ = false;
+      if (close_after_writes_) {
+        ForceClose();
+      }
+      return;
+    }
+
+    write_in_progress_ = true;
+    websocket_.text(pending_frames_.front().is_text);
+    websocket_.async_write(
+        asio::buffer(pending_frames_.front().payload),
+        [self = this->shared_from_this()](const boost::system::error_code& error_code,
+                                          const std::size_t /*bytes_transferred*/) {
+          if (error_code) {
+            self->ForceClose();
+            return;
+          }
+
+          self->pending_frames_.pop_front();
+          self->DoWrite();
+        });
+  }
+
+  void ReleaseControlIfHeld() {
+    if (!has_control_) {
+      return;
+    }
+    const bool released = session_manager_.ReleaseControl(session_id_, client_id_);
+    static_cast<void>(released);
+    has_control_ = false;
+  }
+
+  websocket::stream<Stream> websocket_;
+  vibe::service::SessionManager& session_manager_;
+  const vibe::auth::Authorizer& authorizer_;
+  std::shared_ptr<WebSocketRegistry> websocket_registry_;
+  beast::flat_buffer read_buffer_;
+  std::deque<PendingFrame> pending_frames_;
+  std::unique_ptr<asio::posix::stream_descriptor> pty_readable_;
+  std::string target_;
+  std::string session_id_;
+  std::string client_id_;
+  std::string client_address_;
+  std::uint64_t next_output_sequence_{1};
+  bool has_control_{false};
+  bool write_in_progress_{false};
+  bool close_after_writes_{false};
+  bool exit_event_sent_{false};
+  bool closed_{false};
+  bool is_local_request_{false};
+  ListenerRole listener_role_{ListenerRole::RemoteClient};
+  std::int64_t connected_at_unix_ms_{0};
+};
+
 void CloseAllWebSockets(WebSocketRegistry& websocket_registry) {
   PruneRegistry(websocket_registry);
   for (auto& [session_id, sessions] : websocket_registry) {
@@ -986,7 +1374,7 @@ class SessionPump : public std::enable_shared_from_this<SessionPump> {
         continue;
       }
 
-      if (session_manager_.HasPrivilegedLocalController(it->first)) {
+      if (session_manager_.HasPrivilegedController(it->first)) {
         ++it;
         continue;
       }
@@ -1164,6 +1552,17 @@ class HttpSession : public std::enable_shared_from_this<HttpSession<Stream>> {
         [self = this->shared_from_this()](const boost::system::error_code& error_code,
                                           const std::size_t /*bytes_transferred*/) {
           if (error_code) {
+            return;
+          }
+
+          if (websocket::is_upgrade(self->request_) &&
+              IsControllerWebSocketTarget(std::string(self->request_.target()))) {
+            const auto endpoint = self->RemoteEndpoint();
+            std::make_shared<RemoteControllerWebSocketSession<Stream>>(
+                std::move(self->stream_), self->session_manager_, self->authorizer_,
+                self->websocket_registry_, endpoint.address().to_string(),
+                endpoint.address().is_loopback(), self->listener_role_)
+                ->Start(std::move(self->request_));
             return;
           }
 

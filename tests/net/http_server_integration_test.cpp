@@ -512,6 +512,46 @@ TEST_F(HttpServerFixture, WebSocketSessionEndpointSupportsRawTerminalStreamMode)
   EXPECT_TRUE(saw_binary_output);
 }
 
+TEST_F(HttpServerFixture, RemoteControllerEndpointAcceptsBinaryInputAndStreamsBinaryOutput) {
+  const std::string token = EnsureApprovedToken();
+  auto create_response =
+      SendRequest(kRemotePort, http::verb::post, "/sessions",
+                  R"({"provider":"codex","workspaceRoot":".","title":"ws-controller","command":["/usr/bin/perl","-e","$|=1; system(q(stty -echo -icanon min 1 time 0)); while (sysread(STDIN, $c, 1)) { syswrite(STDOUT, $c); }"]})",
+                  token);
+  EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = ExtractSessionId(create_response.body());
+  ASSERT_FALSE(session_id.empty());
+
+  asio::io_context io_context;
+  tcp::resolver resolver(io_context);
+  websocket::stream<tcp::socket> websocket(io_context);
+  const auto results = resolver.resolve("127.0.0.1", std::to_string(kRemotePort));
+  auto endpoint = asio::connect(websocket.next_layer(), results);
+  static_cast<void>(endpoint);
+
+  websocket.set_option(websocket::stream_base::decorator(
+      [&token](websocket::request_type& request) {
+        request.set(http::field::authorization, "Bearer " + token);
+      }));
+  websocket.handshake("127.0.0.1:" + std::to_string(kRemotePort),
+                      "/ws/sessions/" + session_id + "/controller");
+
+  beast::flat_buffer buffer;
+  websocket.read(buffer);
+  const std::string ready_payload = beast::buffers_to_string(buffer.data());
+  EXPECT_TRUE(websocket.got_text());
+  EXPECT_NE(ready_payload.find("\"type\":\"controller.ready\""), std::string::npos);
+  buffer.consume(buffer.size());
+
+  websocket.text(false);
+  websocket.write(asio::buffer(std::string(",")));
+
+  websocket.read(buffer);
+  const std::string echoed_payload = beast::buffers_to_string(buffer.data());
+  EXPECT_FALSE(websocket.got_text());
+  EXPECT_EQ(echoed_payload, ",");
+}
+
 TEST_F(HttpServerFixture, WebSocketSessionEndpointStreamsExitEventsAfterStop) {
   const std::string token = EnsureApprovedToken();
   const std::string create_response = CreateSession(token);

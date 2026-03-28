@@ -20,6 +20,13 @@ namespace vibe::service {
 namespace {
 
 constexpr std::string_view kPrivilegedLocalControllerPrefix = "local-controller-";
+constexpr std::string_view kPrivilegedRemoteControllerPrefix = "remote-controller-";
+
+auto IsPrivilegedControllerClientId(const std::optional<std::string>& controller_client_id) -> bool {
+  return controller_client_id.has_value() &&
+         (controller_client_id->starts_with(kPrivilegedLocalControllerPrefix) ||
+          controller_client_id->starts_with(kPrivilegedRemoteControllerPrefix));
+}
 
 class ServerTraceLogger {
  public:
@@ -877,11 +884,10 @@ auto SessionManager::HasControl(const std::string& session_id, const std::string
   return false;
 }
 
-auto SessionManager::HasPrivilegedLocalController(const std::string& session_id) const -> bool {
+auto SessionManager::HasPrivilegedController(const std::string& session_id) const -> bool {
   if (const SessionEntry* entry = FindEntry(session_id); entry != nullptr) {
-    return entry->controller_kind == vibe::session::ControllerKind::Host &&
-           entry->controller_client_id.has_value() &&
-           entry->controller_client_id->starts_with(kPrivilegedLocalControllerPrefix);
+    return entry->controller_kind != vibe::session::ControllerKind::None &&
+           IsPrivilegedControllerClientId(entry->controller_client_id);
   }
 
   return false;
@@ -963,12 +969,8 @@ void SessionManager::PollAll(const int read_timeout_ms) {
       continue;
     }
 
-    const bool privileged_local_controller =
-        entry.controller_kind == vibe::session::ControllerKind::Host &&
-        entry.controller_client_id.has_value() &&
-        entry.controller_client_id->starts_with(kPrivilegedLocalControllerPrefix);
-
-    if (privileged_local_controller) {
+    if (entry.controller_kind != vibe::session::ControllerKind::None &&
+        IsPrivilegedControllerClientId(entry.controller_client_id)) {
       continue;
     }
 
