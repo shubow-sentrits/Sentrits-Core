@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <boost/asio.hpp>
+#include <boost/asio/posix/stream_descriptor.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
@@ -19,9 +20,11 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unistd.h>
 
 #include "vibe/net/discovery_broadcaster.h"
 #include "vibe/net/http_shared.h"
@@ -39,6 +42,8 @@ namespace websocket = beast::websocket;
 using tcp = asio::ip::tcp;
 
 namespace {
+
+constexpr auto kMaintenancePollInterval = std::chrono::milliseconds(50);
 
 using SslStream = beast::ssl_stream<tcp::socket>;
 
@@ -445,6 +450,8 @@ class WebSocketSession final : public WebSocketSessionBase,
                              std::to_string(reinterpret_cast<std::uintptr_t>(self.get()));
           self->connected_at_unix_ms_ = CurrentUnixTimeMs();
           self->sequence_window_ = {};
+          boost::system::error_code socket_error;
+          beast::get_lowest_layer(self->websocket_).set_option(tcp::no_delay(true), socket_error);
           (*self->websocket_registry_)[self->session_id_].push_back(self);
           self->QueueInitialEvents();
           self->DoRead();
@@ -842,12 +849,118 @@ class SessionPump : public std::enable_shared_from_this<SessionPump> {
   }
 
  private:
+  void NotifySessionClients(const std::string& session_id) {
+    const auto registry_it = websocket_registry_->find(session_id);
+    if (registry_it == websocket_registry_->end()) {
+      return;
+    }
+
+    auto& sessions = registry_it->second;
+    for (auto it = sessions.begin(); it != sessions.end();) {
+      if (const auto session = it->lock()) {
+        session->SendPendingOutput();
+        ++it;
+      } else {
+        it = sessions.erase(it);
+      }
+    }
+  }
+
+  void SyncReadableWatchers() {
+    std::unordered_set<std::string> active_session_ids;
+    for (auto it = websocket_registry_->begin(); it != websocket_registry_->end();) {
+      auto& sessions = it->second;
+      for (auto session_it = sessions.begin(); session_it != sessions.end();) {
+        if (session_it->expired()) {
+          session_it = sessions.erase(session_it);
+        } else {
+          ++session_it;
+        }
+      }
+
+      if (sessions.empty()) {
+        it = websocket_registry_->erase(it);
+        continue;
+      }
+
+      active_session_ids.insert(it->first);
+      ++it;
+    }
+
+    for (const auto& session_id : active_session_ids) {
+      const auto readable_fd = session_manager_.GetReadableFd(session_id);
+      if (!readable_fd.has_value()) {
+        readable_watchers_.erase(session_id);
+        continue;
+      }
+
+      if (readable_watchers_.contains(session_id)) {
+        continue;
+      }
+
+      const int duplicated_fd = dup(*readable_fd);
+      if (duplicated_fd < 0) {
+        continue;
+      }
+
+      auto descriptor =
+          std::make_unique<asio::posix::stream_descriptor>(poll_timer_.get_executor());
+      descriptor->assign(duplicated_fd);
+      readable_watchers_.emplace(session_id, std::move(descriptor));
+      ArmReadableWait(session_id);
+    }
+
+    for (auto it = readable_watchers_.begin(); it != readable_watchers_.end();) {
+      if (!active_session_ids.contains(it->first) ||
+          !session_manager_.GetReadableFd(it->first).has_value()) {
+        it = readable_watchers_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  void ArmReadableWait(const std::string& session_id) {
+    const auto watcher_it = readable_watchers_.find(session_id);
+    if (watcher_it == readable_watchers_.end()) {
+      return;
+    }
+
+    watcher_it->second->async_wait(
+        asio::posix::stream_descriptor::wait_read,
+        [self = shared_from_this(), session_id](const boost::system::error_code& error_code) {
+          if (error_code == asio::error::operation_aborted) {
+            return;
+          }
+
+          if (!self->readable_watchers_.contains(session_id)) {
+            return;
+          }
+
+          if (error_code) {
+            self->readable_watchers_.erase(session_id);
+            return;
+          }
+
+          static_cast<void>(self->session_manager_.PollSession(session_id, 0));
+          self->NotifySessionClients(session_id);
+
+          if (self->session_manager_.GetReadableFd(session_id).has_value() &&
+              self->readable_watchers_.contains(session_id)) {
+            self->ArmReadableWait(session_id);
+          } else {
+            self->readable_watchers_.erase(session_id);
+          }
+        });
+  }
+
   void DoPoll() {
     if (stopped_) {
       return;
     }
 
-    poll_timer_.expires_after(std::chrono::milliseconds(50));
+    SyncReadableWatchers();
+    poll_timer_.expires_after(kMaintenancePollInterval);
     poll_timer_.async_wait([self = shared_from_this()](const boost::system::error_code& error_code) {
       if (error_code == asio::error::operation_aborted) {
         return;
@@ -887,6 +1000,7 @@ class SessionPump : public std::enable_shared_from_this<SessionPump> {
   vibe::service::SessionManager& session_manager_;
   std::shared_ptr<WebSocketRegistry> websocket_registry_;
   std::shared_ptr<OverviewWebSocketRegistry> overview_websocket_registry_;
+  std::unordered_map<std::string, std::unique_ptr<asio::posix::stream_descriptor>> readable_watchers_;
   bool stopped_{false};
 };
 
