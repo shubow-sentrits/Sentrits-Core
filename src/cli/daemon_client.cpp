@@ -138,8 +138,8 @@ class ScopedRawTerminalMode {
     raw_attributes.c_cflag |= CS8;
     raw_attributes.c_lflag &=
         static_cast<tcflag_t>(~(ECHO | ICANON | IEXTEN | ISIG));
-    raw_attributes.c_cc[VMIN] = 0;
-    raw_attributes.c_cc[VTIME] = 1;
+    raw_attributes.c_cc[VMIN] = 1;
+    raw_attributes.c_cc[VTIME] = 0;
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw_attributes) == 0) {
       active_ = true;
@@ -502,6 +502,9 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
     std::cerr << "connect failed: " << error_code.message() << '\n';
     return 1;
   }
+
+  ws.next_layer().set_option(tcp::no_delay(true), error_code);
+  error_code.clear();
 
   ws.handshake(endpoint.host + ":" + ToStringPort(endpoint.port), BuildWebSocketTarget(session_id),
                error_code);
