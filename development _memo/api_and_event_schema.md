@@ -11,6 +11,7 @@ Internal note:
 - the public remote API remains HTTP plus WebSocket on the remote listener
 - host-local `session-start` and `session-attach` now use an internal privileged controller stream for low-latency control
 - that local controller stream is daemon-private and is not part of the web or mobile client contract
+- remote web and mobile clients should use a dedicated controller WebSocket when they become the active controller
 
 ## Discovery Endpoints
 
@@ -270,6 +271,64 @@ Contains git summary deltas or full replacement snapshots.
 
 Carries final exit code or error reason.
 
+## Controller WebSocket
+
+Interactive control should use a dedicated endpoint:
+
+- `ws://HOST:18086/ws/sessions/{sessionId}/controller`
+
+This endpoint is for the active controller only.
+
+Behavior:
+
+- opening the socket requests remote control immediately
+- on success, the socket becomes the privileged low-latency controller lane
+- on failure, the server sends a rejection frame and closes or otherwise terminates the attempt
+- replay and inspection remain the job of the observer APIs
+
+### Controller Server Frames
+
+Binary frames:
+
+- raw terminal output only
+
+Text frames:
+
+- `controller.ready`
+- `controller.rejected`
+- `controller.released`
+- `session.exited`
+
+Suggested `controller.ready` payload:
+
+```json
+{
+  "type": "controller.ready",
+  "sessionId": "s_123",
+  "controllerKind": "remote"
+}
+```
+
+Suggested `controller.rejected` payload:
+
+```json
+{
+  "type": "controller.rejected",
+  "sessionId": "s_123",
+  "code": "control_unavailable",
+  "message": "session already has an active controller"
+}
+```
+
+Suggested `controller.released` payload:
+
+```json
+{
+  "type": "controller.released",
+  "sessionId": "s_123"
+}
+```
+
 ## WebSocket Commands
 
 These are client-to-server messages over the attached session WebSocket.
@@ -319,6 +378,35 @@ Suggested payload:
 {
   "type": "session.control.request"
 }
+
+## Controller WebSocket Client Frames
+
+On the dedicated controller WebSocket:
+
+- binary frames are raw terminal input bytes
+- text frames are reserved for infrequent control messages
+
+Suggested text commands:
+
+```json
+{
+  "type": "terminal.resize",
+  "cols": 120,
+  "rows": 40
+}
+```
+
+```json
+{
+  "type": "session.stop"
+}
+```
+
+```json
+{
+  "type": "session.control.release"
+}
+```
 
 ### `session.groups.update`
 

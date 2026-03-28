@@ -122,6 +122,7 @@ Sections:
 - xterm-style rendering
 - observer/controller state visible near the terminal
 - reconnect and exited states clearly shown
+- when controlling, live terminal bytes should come from the dedicated controller WebSocket, not the observer session socket
 
 ### Inspection Panel
 
@@ -157,8 +158,21 @@ Do not require manual token copy/paste in the normal flow.
 - Angular app inside the shared frontend workspace
 - keep `xterm.js` for terminal rendering
 - use websocket inventory subscription for the session list
-- use per-session websocket only for opened session tabs
+- use per-session observer websocket for opened session tabs
+- use `/ws/sessions/{sessionId}/controller` only when the user actively controls a session
 - treat in-page tab state as UI state, not runtime truth
+
+Control transport split:
+
+- observer socket
+  - replay
+  - session metadata
+  - passive terminal viewing
+- controller socket
+  - raw terminal input/output
+  - resize
+  - stop
+  - release control
 
 ## Non-Goals
 

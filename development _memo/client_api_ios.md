@@ -21,6 +21,13 @@ For iOS MVP, the app should assume:
 - WebSocket over `ws://HOST:18086`
 - later migration to `https://` and `wss://` is expected
 
+There are two session WebSocket roles:
+
+- observer attach:
+  - `ws://HOST:18086/ws/sessions/{sessionId}`
+- active controller attach:
+  - `ws://HOST:18086/ws/sessions/{sessionId}/controller`
+
 ## Authentication Model
 
 The iOS client uses the remote listener only.
@@ -213,6 +220,34 @@ Attach-time behavior:
 - server then emits attach-time terminal replay as `terminal.output`
 - server then continues incremental output
 
+This observer socket remains the right choice for:
+
+- inventory-driven session tabs
+- replay and reconnect recovery
+- passive viewing
+- session metadata and lifecycle updates
+
+## Controller WebSocket Attach
+
+Endpoint:
+
+- `ws://HOST:18086/ws/sessions/{sessionId}/controller`
+
+Use this socket only when the focused session is actively controlling the host session.
+
+Attach rules:
+
+- requires authorization
+- requests remote control immediately on connect
+- on success, becomes the privileged low-latency controller lane
+- on failure, returns a rejection frame
+
+Important guidance:
+
+- keep the observer socket for session metadata and replay
+- use the controller socket for live terminal input and return output
+- do not expect replay or `terminal.output` JSON frames on the controller socket
+
 ## WebSocket Server Events
 
 All event payloads are JSON.
@@ -263,6 +298,45 @@ Use it to:
 - mark the session ended
 - detach or disable input UI
 
+### `controller.ready`
+
+Important fields:
+
+- `type`
+- `sessionId`
+- `controllerKind`
+
+Use it to:
+
+- mark the focused view as live-controlling
+- enable terminal input
+
+### `controller.rejected`
+
+Important fields:
+
+- `type`
+- `sessionId`
+- `code`
+- `message`
+
+Use it to:
+
+- show control rejection
+- fall back to observer-only mode
+
+### `controller.released`
+
+Important fields:
+
+- `type`
+- `sessionId`
+
+Use it to:
+
+- disable terminal input
+- return the focused view to observer mode
+
 ### `error`
 
 Important fields:
@@ -278,6 +352,13 @@ Use it for:
 - malformed command feedback
 
 ## WebSocket Client Commands
+
+Observer WebSocket commands remain available and useful for fallback behavior.
+
+For the focused interactive terminal, prefer:
+
+- binary frames on `/ws/sessions/{sessionId}/controller` for terminal input
+- text frames on `/ws/sessions/{sessionId}/controller` for resize, stop, and release
 
 ### `session.control.request`
 
