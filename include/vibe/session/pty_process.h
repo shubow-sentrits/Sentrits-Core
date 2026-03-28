@@ -30,6 +30,7 @@ class IPtyProcess {
   [[nodiscard]] virtual auto Start(const LaunchSpec& launch_spec) -> StartResult = 0;
   [[nodiscard]] virtual auto Write(std::string_view input) -> bool = 0;
   [[nodiscard]] virtual auto Read(int timeout_ms) -> ReadResult = 0;
+  [[nodiscard]] virtual auto ReadableFd() const -> std::optional<int> = 0;
   [[nodiscard]] virtual auto Resize(TerminalSize terminal_size) -> bool = 0;
   [[nodiscard]] virtual auto PollExit() -> std::optional<int> = 0;
   [[nodiscard]] virtual auto Terminate() -> bool = 0;

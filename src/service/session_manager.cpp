@@ -518,6 +518,14 @@ auto SessionManager::GetOutputSince(const std::string& session_id, const std::ui
   return std::nullopt;
 }
 
+auto SessionManager::GetReadableFd(const std::string& session_id) const -> std::optional<int> {
+  if (const SessionEntry* entry = FindEntry(session_id); entry != nullptr && entry->runtime != nullptr) {
+    return entry->runtime->readable_fd();
+  }
+
+  return std::nullopt;
+}
+
 auto SessionManager::ReadFile(const std::string& session_id, const std::string& workspace_path,
                               const std::size_t max_bytes) const -> SessionFileReadResult {
   const SessionEntry* entry = FindEntry(session_id);
@@ -853,6 +861,33 @@ auto SessionManager::Shutdown() -> std::size_t {
   return shutdown_count;
 }
 
+auto SessionManager::PollSession(const std::string& session_id, const int read_timeout_ms) -> bool {
+  SessionEntry* entry = FindEntry(session_id);
+  if (entry == nullptr || entry->runtime == nullptr) {
+    return false;
+  }
+
+  entry->runtime->PollOnce(read_timeout_ms);
+  const auto snapshot = entry->runtime->record().snapshot();
+  if (snapshot.current_sequence != entry->last_observed_sequence) {
+    const auto now_unix_ms = CurrentUnixTimeMs();
+    entry->last_observed_sequence = snapshot.current_sequence;
+    entry->last_output_at_unix_ms = now_unix_ms;
+    entry->last_activity_at_unix_ms = now_unix_ms;
+  }
+
+  const auto current_status = entry->runtime->record().metadata().status;
+  if (current_status != entry->last_observed_status) {
+    const auto now_unix_ms = CurrentUnixTimeMs();
+    entry->last_status_at_unix_ms = now_unix_ms;
+    entry->last_activity_at_unix_ms = now_unix_ms;
+    entry->last_observed_status = current_status;
+  }
+
+  PersistEntry(*entry);
+  return true;
+}
+
 void SessionManager::PollAll(const int read_timeout_ms) {
   poll_count_ += 1;
   const bool should_poll_git = (poll_count_ % 100 == 0);
@@ -863,22 +898,8 @@ void SessionManager::PollAll(const int read_timeout_ms) {
       continue;
     }
 
-    entry.runtime->PollOnce(read_timeout_ms);
+    static_cast<void>(PollSession(entry.id.value(), read_timeout_ms));
     auto snapshot = entry.runtime->record().snapshot();
-    if (snapshot.current_sequence != entry.last_observed_sequence) {
-      const auto now_unix_ms = CurrentUnixTimeMs();
-      entry.last_observed_sequence = snapshot.current_sequence;
-      entry.last_output_at_unix_ms = now_unix_ms;
-      entry.last_activity_at_unix_ms = now_unix_ms;
-    }
-    const auto current_status = entry.runtime->record().metadata().status;
-    if (current_status != entry.last_observed_status) {
-      const auto now_unix_ms = CurrentUnixTimeMs();
-      entry.last_status_at_unix_ms = now_unix_ms;
-      entry.last_activity_at_unix_ms = now_unix_ms;
-      entry.last_observed_status = current_status;
-    }
-    PersistEntry(entry);
 
     if (should_poll_git && entry.git_inspector) {
       const auto git_summary = entry.git_inspector->Inspect();
