@@ -20,6 +20,7 @@ class SessionRuntime {
   [[nodiscard]] auto launch_spec() const -> const LaunchSpec&;
   [[nodiscard]] auto pid() const -> std::optional<ProcessId>;
   [[nodiscard]] auto output_buffer() const -> const SessionOutputBuffer&;
+  [[nodiscard]] auto readable_fd() const -> std::optional<int>;
 
   [[nodiscard]] auto Start() -> bool;
   [[nodiscard]] auto WriteInput(std::string_view input) -> bool;

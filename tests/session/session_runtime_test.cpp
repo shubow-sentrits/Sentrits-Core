@@ -19,6 +19,7 @@ class FakePtyProcess final : public IPtyProcess {
   }
 
   [[nodiscard]] auto Read(int /*timeout_ms*/) -> ReadResult override { return next_read_result; }
+  [[nodiscard]] auto ReadableFd() const -> std::optional<int> override { return readable_fd; }
 
   [[nodiscard]] auto Resize(const TerminalSize terminal_size) -> bool override {
     resizes.push_back(terminal_size);
@@ -38,6 +39,7 @@ class FakePtyProcess final : public IPtyProcess {
   bool terminate_result{true};
   ReadResult next_read_result{.data = "", .closed = false};
   std::optional<int> next_exit_code{std::nullopt};
+  std::optional<int> readable_fd{99};
   int start_count{0};
   int terminate_count{0};
   LaunchSpec last_launch_spec{
@@ -110,6 +112,14 @@ TEST(SessionRuntimeTest, InputAndResizeRequireInteractiveState) {
 
   EXPECT_EQ(pty_process.writes, (std::vector<std::string>{"after start"}));
   EXPECT_EQ(pty_process.resizes, (std::vector<TerminalSize>{TerminalSize{.columns = 100, .rows = 40}}));
+}
+
+TEST(SessionRuntimeTest, ExposesReadableFdFromPtyProcess) {
+  FakePtyProcess pty_process;
+  pty_process.readable_fd = 123;
+  SessionRuntime runtime = MakeRuntime(pty_process);
+
+  EXPECT_EQ(runtime.readable_fd(), 123);
 }
 
 TEST(SessionRuntimeTest, ExitClearsPidAndUpdatesStatus) {

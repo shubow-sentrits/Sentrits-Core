@@ -180,6 +180,14 @@ auto PosixPtyProcess::Read(const int timeout_ms) -> ReadResult {
   };
 }
 
+auto PosixPtyProcess::ReadableFd() const -> std::optional<int> {
+  if (master_fd_ == -1) {
+    return std::nullopt;
+  }
+
+  return master_fd_;
+}
+
 auto PosixPtyProcess::Resize(const TerminalSize terminal_size) -> bool {
   if (master_fd_ == -1) {
     return false;

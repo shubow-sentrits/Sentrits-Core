@@ -19,6 +19,8 @@ auto SessionRuntime::pid() const -> std::optional<ProcessId> { return pid_; }
 
 auto SessionRuntime::output_buffer() const -> const SessionOutputBuffer& { return output_buffer_; }
 
+auto SessionRuntime::readable_fd() const -> std::optional<int> { return pty_process_.ReadableFd(); }
+
 auto SessionRuntime::Start() -> bool {
   if (!record_.TryTransition(SessionStatus::Starting)) {
     return false;

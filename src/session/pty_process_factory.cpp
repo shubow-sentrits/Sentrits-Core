@@ -27,6 +27,7 @@ class UnsupportedPtyProcess final : public IPtyProcess {
   [[nodiscard]] auto Read(int /*timeout_ms*/) -> ReadResult override {
     return ReadResult{.data = "", .closed = true};
   }
+  [[nodiscard]] auto ReadableFd() const -> std::optional<int> override { return std::nullopt; }
   [[nodiscard]] auto Resize(TerminalSize /*terminal_size*/) -> bool override { return false; }
   [[nodiscard]] auto PollExit() -> std::optional<int> override { return std::nullopt; }
   [[nodiscard]] auto Terminate() -> bool override { return false; }

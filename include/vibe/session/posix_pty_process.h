@@ -13,6 +13,7 @@ class PosixPtyProcess final : public IPtyProcess {
   [[nodiscard]] auto Start(const LaunchSpec& launch_spec) -> StartResult override;
   [[nodiscard]] auto Write(std::string_view input) -> bool override;
   [[nodiscard]] auto Read(int timeout_ms) -> ReadResult override;
+  [[nodiscard]] auto ReadableFd() const -> std::optional<int> override;
   [[nodiscard]] auto Resize(TerminalSize terminal_size) -> bool override;
   [[nodiscard]] auto PollExit() -> std::optional<int> override;
   [[nodiscard]] auto Terminate() -> bool override;

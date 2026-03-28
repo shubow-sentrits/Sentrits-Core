@@ -110,6 +110,7 @@ class SessionManager {
       -> std::optional<vibe::session::OutputSlice>;
   [[nodiscard]] auto GetOutputSince(const std::string& session_id, std::uint64_t seq) const
       -> std::optional<vibe::session::OutputSlice>;
+  [[nodiscard]] auto GetReadableFd(const std::string& session_id) const -> std::optional<int>;
   [[nodiscard]] auto ReadFile(const std::string& session_id, const std::string& workspace_path,
                               std::size_t max_bytes) const -> SessionFileReadResult;
   [[nodiscard]] auto SendInput(const std::string& session_id, const std::string& input) -> bool;
@@ -127,6 +128,7 @@ class SessionManager {
   [[nodiscard]] auto ReleaseControl(const std::string& session_id, const std::string& client_id) -> bool;
   [[nodiscard]] auto HasControl(const std::string& session_id, const std::string& client_id) const -> bool;
   [[nodiscard]] auto Shutdown() -> std::size_t;
+  [[nodiscard]] auto PollSession(const std::string& session_id, int read_timeout_ms) -> bool;
   void PollAll(int read_timeout_ms);
 
  private:
