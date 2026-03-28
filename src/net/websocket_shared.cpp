@@ -60,7 +60,17 @@ void StreamSequenceWindow::MarkDelivered(const std::uint64_t next_sequence) {
 
 auto IsSessionWebSocketTarget(const std::string& target) -> bool {
   const std::string path = StripQueryString(target);
-  return path.rfind("/ws/sessions/", 0) == 0 && path.size() > std::string("/ws/sessions/").size();
+  if (path.rfind("/ws/sessions/", 0) != 0 || path.size() <= std::string("/ws/sessions/").size()) {
+    return false;
+  }
+
+  return !path.ends_with("/controller");
+}
+
+auto IsControllerWebSocketTarget(const std::string& target) -> bool {
+  const std::string path = StripQueryString(target);
+  return path.rfind("/ws/sessions/", 0) == 0 && path.ends_with("/controller") &&
+         path.size() > std::string("/ws/sessions//controller").size();
 }
 
 auto IsOverviewWebSocketTarget(const std::string& target) -> bool {
@@ -69,16 +79,21 @@ auto IsOverviewWebSocketTarget(const std::string& target) -> bool {
 
 auto ExtractSessionIdFromWebSocketTarget(const std::string& target) -> std::string {
   constexpr auto prefix = "/ws/sessions/";
-  if (!IsSessionWebSocketTarget(target)) {
+  if (!IsSessionWebSocketTarget(target) && !IsControllerWebSocketTarget(target)) {
     return "";
   }
 
   const std::string path = StripQueryString(target);
-  return path.substr(std::string(prefix).size());
+  std::string session_part = path.substr(std::string(prefix).size());
+  if (session_part.ends_with("/controller")) {
+    session_part.resize(session_part.size() - std::string("/controller").size());
+  }
+  return session_part;
 }
 
 auto ExtractAccessTokenFromWebSocketTarget(const std::string& target) -> std::string {
-  if (!IsSessionWebSocketTarget(target) && !IsOverviewWebSocketTarget(target)) {
+  if (!IsSessionWebSocketTarget(target) && !IsControllerWebSocketTarget(target) &&
+      !IsOverviewWebSocketTarget(target)) {
     return "";
   }
 
@@ -86,7 +101,7 @@ auto ExtractAccessTokenFromWebSocketTarget(const std::string& target) -> std::st
 }
 
 auto IsRawTerminalStreamRequested(const std::string& target) -> bool {
-  if (!IsSessionWebSocketTarget(target)) {
+  if (!IsSessionWebSocketTarget(target) && !IsControllerWebSocketTarget(target)) {
     return false;
   }
 

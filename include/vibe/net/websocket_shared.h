@@ -19,6 +19,7 @@ class StreamSequenceWindow {
 };
 
 [[nodiscard]] auto IsSessionWebSocketTarget(const std::string& target) -> bool;
+[[nodiscard]] auto IsControllerWebSocketTarget(const std::string& target) -> bool;
 [[nodiscard]] auto IsOverviewWebSocketTarget(const std::string& target) -> bool;
 [[nodiscard]] auto ExtractSessionIdFromWebSocketTarget(const std::string& target) -> std::string;
 [[nodiscard]] auto ExtractAccessTokenFromWebSocketTarget(const std::string& target) -> std::string;
