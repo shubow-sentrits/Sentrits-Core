@@ -18,7 +18,11 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <string_view>
 #include <vector>
 #include <thread>
@@ -38,11 +42,59 @@ volatile sig_atomic_t g_terminal_resize_pending = 0;
 
 void HandleWindowResizeSignal(int /*signal_number*/) { g_terminal_resize_pending = 1; }
 
+class AttachTraceLogger {
+ public:
+  AttachTraceLogger() {
+    const char* path = std::getenv("VIBE_ATTACH_TRACE_PATH");
+    if (path == nullptr || *path == '\0') {
+      return;
+    }
+
+    output_ = std::make_unique<std::ofstream>(path, std::ios::out | std::ios::trunc);
+    if (output_ == nullptr || !output_->is_open()) {
+      output_.reset();
+      return;
+    }
+    start_time_ = std::chrono::steady_clock::now();
+  }
+
+  void Log(const std::string_view event, const std::size_t value = 0) {
+    if (output_ == nullptr) {
+      return;
+    }
+
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_time_)
+            .count();
+    std::lock_guard<std::mutex> lock(mutex_);
+    (*output_) << elapsed << ' ' << event << ' ' << value << '\n';
+    output_->flush();
+  }
+
+ private:
+  std::unique_ptr<std::ofstream> output_;
+  std::chrono::steady_clock::time_point start_time_{};
+  std::mutex mutex_;
+};
+
 auto BuildWebSocketTarget(const std::string& session_id) -> std::string {
   return "/ws/sessions/" + session_id + "?stream=raw";
 }
 
 auto ToStringPort(const std::uint16_t port) -> std::string { return std::to_string(port); }
+
+auto IsFdReadableNow(const int fd) -> bool {
+  fd_set read_fds;
+  FD_ZERO(&read_fds);
+  FD_SET(fd, &read_fds);
+
+  timeval timeout{};
+  timeout.tv_sec = 0;
+  timeout.tv_usec = 0;
+
+  const int select_result = select(fd + 1, &read_fds, nullptr, nullptr, &timeout);
+  return select_result > 0 && FD_ISSET(fd, &read_fds);
+}
 
 void WriteAllToStdout(const std::string_view data) {
   const char* bytes = data.data();
@@ -498,6 +550,7 @@ auto ListSessions(const DaemonEndpoint& endpoint) -> std::optional<std::vector<L
 
 auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id,
                    const vibe::session::ControllerKind controller_kind) -> int {
+  AttachTraceLogger trace_logger;
   asio::io_context io_context;
   tcp::resolver resolver(io_context);
   websocket::stream<tcp::socket> ws(io_context);
@@ -524,6 +577,7 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
     std::cerr << "websocket handshake failed: " << error_code.message() << '\n';
     return 1;
   }
+  trace_logger.Log("ws.handshake");
 
   auto write_command = [&ws](const std::string& command) -> bool {
     boost::system::error_code write_error;
@@ -535,6 +589,7 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
     std::cerr << "failed to request control\n";
     return 1;
   }
+  trace_logger.Log("ws.write.control_request");
   SessionStreamState stream_state{
       .has_control = false,
       .control_request_pending = true,
@@ -550,6 +605,37 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
   int exit_code = 0;
   bool stdin_open = true;
   const int websocket_fd = ws.next_layer().native_handle();
+
+  auto drain_websocket_frames = [&]() -> std::optional<int> {
+    bool should_continue = true;
+    while (should_continue) {
+      error_code.clear();
+      ws.read(buffer, error_code);
+      if (error_code == websocket::error::closed) {
+        return exit_code;
+      }
+      if (error_code) {
+        std::cerr << "websocket read failed: " << error_code.message() << '\n';
+        return 1;
+      }
+
+      const std::string payload = beast::buffers_to_string(buffer.data());
+      trace_logger.Log(ws.got_text() ? "ws.read.text" : "ws.read.binary", payload.size());
+      buffer.consume(buffer.size());
+      if (ws.got_text()) {
+        if (!HandleServerMessage(payload, controller_kind, stream_state, exit_code)) {
+          return exit_code;
+        }
+      } else {
+        trace_logger.Log("stdout.write", payload.size());
+        WriteAllToStdout(payload);
+      }
+
+      should_continue = IsFdReadableNow(websocket_fd);
+    }
+
+    return std::nullopt;
+  };
 
   while (true) {
     if (controller_kind == vibe::session::ControllerKind::Host &&
@@ -580,6 +666,7 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
         std::cerr << "failed to send resize update\n";
         return 1;
       }
+      trace_logger.Log("ws.write.resize");
       resize_sync_pending = false;
     }
 
@@ -605,23 +692,8 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
     }
 
     if (FD_ISSET(websocket_fd, &read_fds)) {
-      error_code.clear();
-      ws.read(buffer, error_code);
-      if (!error_code) {
-        const std::string payload = beast::buffers_to_string(buffer.data());
-        buffer.consume(buffer.size());
-        if (ws.got_text()) {
-          if (!HandleServerMessage(payload, controller_kind, stream_state, exit_code)) {
-            return exit_code;
-          }
-        } else {
-          WriteAllToStdout(payload);
-        }
-      } else if (error_code == websocket::error::closed) {
-        return exit_code;
-      } else {
-        std::cerr << "websocket read failed: " << error_code.message() << '\n';
-        return 1;
+      if (const auto read_result = drain_websocket_frames(); read_result.has_value()) {
+        return *read_result;
       }
     }
 
@@ -631,8 +703,10 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
         if (bytes_read == 0) {
           const bool released = write_command(BuildReleaseControlCommand());
           static_cast<void>(released);
+          trace_logger.Log("ws.write.release");
           return 0;
         } else if (bytes_read > 0) {
+          trace_logger.Log("stdin.read", static_cast<std::size_t>(bytes_read));
           if (!stream_state.has_control) {
             continue;
           }
@@ -642,6 +716,7 @@ auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id
             std::cerr << "failed to send terminal input\n";
             return 1;
           }
+          trace_logger.Log("ws.write.input", static_cast<std::size_t>(bytes_read));
         }
     }
   }
