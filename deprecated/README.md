@@ -1,0 +1,13 @@
+# Deprecated Assets
+
+This directory holds runtime assets and references that are preserved for compatibility but are no longer the primary product surface.
+
+Current contents:
+
+- `web/host_ui`
+  - legacy daemon-served plain HTML host admin UI
+- `web/remote_client`
+  - legacy daemon-served plain HTML remote client
+
+The maintained browser client now lives in `/Users/shubow/dev/VibeEverywhere-Client`.
+The maintained host-admin workspace in this repo lives under `frontend/`.

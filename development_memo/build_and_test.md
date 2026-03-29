@@ -65,7 +65,7 @@ ctest --test-dir build --output-on-failure -R session
 
 ## Frontend Workspace
 
-The maintained web frontend now lives under `frontend/` as an Angular workspace.
+The maintained in-repo host-admin frontend lives under `frontend/` as an Angular workspace.
 
 Recommended baseline:
 
@@ -87,6 +87,12 @@ For local development:
 npm run start:host-admin
 npm run start:remote-client
 ```
+
+Notes:
+
+- the maintained browser remote client product now lives in `/Users/shubow/dev/VibeEverywhere-Client`
+- the daemon-served plain HTML browser assets are deprecated and now live under `deprecated/web/`
+- keep `frontend/` documentation and commands aligned with what still builds in this repo
 
 ## TDD Workflow
 
@@ -115,7 +121,7 @@ Before a change is considered ready:
 - platform-facing assumptions remain explicit enough to review
 - all relevant automated tests pass
 - full `ctest` run passes locally
-- any design-impacting change updates the corresponding markdown under [development _memo](/Users/shubow/dev/VibeEverywhere/development%20_memo)
+- any design-impacting change updates the corresponding markdown under [development_memo](/Users/shubow/dev/VibeEverywhere/development_memo/README.md)
 
 Platform guardrails for this repo:
 

@@ -12,13 +12,13 @@ This repository is implementing `vibe-hostd`, a local-network session runtime an
 
 ## Primary References
 
-- Product and initiative docs live in [development _memo](/Users/shubow/dev/VibeEverywhere/development%20_memo).
-- Start with [development _memo/implementation_plan.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/implementation_plan.md).
-- MVP acceptance flows are defined in [development _memo/mvp_checklist.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/mvp_checklist.md).
-- Web frontend direction is defined in [development _memo/frontend_strategy.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/frontend_strategy.md), [development _memo/host_ui_v1.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/host_ui_v1.md), and [development _memo/remote_web_client_v1.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/remote_web_client_v1.md).
-- iOS client API and scope are defined in [development _memo/client_api_ios.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/client_api_ios.md), [development _memo/ios_client_mvp.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/ios_client_mvp.md), and [development _memo/ios_client_architecture.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/ios_client_architecture.md).
-- Build and test workflow is defined in [development _memo/build_and_test.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/build_and_test.md).
-- TDD expectations are defined in [development _memo/tdd_policy.md](/Users/shubow/dev/VibeEverywhere/development%20_memo/tdd_policy.md).
+- Product and implementation docs live in [development_memo](/Users/shubow/dev/VibeEverywhere/development_memo/README.md).
+- Runtime architecture is defined in [architecture_refined.md](/Users/shubow/dev/VibeEverywhere/development_memo/architecture_refined.md) and [session_runtime_and_pty.md](/Users/shubow/dev/VibeEverywhere/development_memo/session_runtime_and_pty.md).
+- Current REST and WebSocket contracts are defined in [api_and_event_schema.md](/Users/shubow/dev/VibeEverywhere/development_memo/api_and_event_schema.md).
+- iOS-facing API and architecture notes are in [client_api_ios.md](/Users/shubow/dev/VibeEverywhere/development_memo/client_api_ios.md) and [ios_client_architecture.md](/Users/shubow/dev/VibeEverywhere/development_memo/ios_client_architecture.md).
+- Browser remote-client notes are in [remote_web_client_v1.md](/Users/shubow/dev/VibeEverywhere/development_memo/remote_web_client_v1.md) and [privileged_remote_controller_plan.md](/Users/shubow/dev/VibeEverywhere/development_memo/privileged_remote_controller_plan.md).
+- Build and test workflow is defined in [build_and_test.md](/Users/shubow/dev/VibeEverywhere/development_memo/build_and_test.md).
+- TDD expectations are defined in [tdd_policy.md](/Users/shubow/dev/VibeEverywhere/development_memo/tdd_policy.md).
 
 ## Build Expectations
 
@@ -71,9 +71,9 @@ The repository is still being bootstrapped. As code is added, prefer this shape 
 - `include/`
 - `tests/`
 - `tools/`
-- `development _memo/`
+- `development_memo/`
 
 ## Before Changing Architecture
 
 - Check whether the change affects session identity, PTY handling, buffering, client control semantics, host-attach behavior, or recovery guarantees.
-- Update the relevant detailed design markdown in [development _memo](/Users/shubow/dev/VibeEverywhere/development%20_memo) when the implementation direction changes materially.
+- Update the relevant detailed design markdown in [development_memo](/Users/shubow/dev/VibeEverywhere/development_memo/README.md) when the implementation direction changes materially.

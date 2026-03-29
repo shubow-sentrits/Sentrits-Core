@@ -47,4 +47,4 @@ npm run test:remote-client
 
 - use an LTS Node release for normal frontend development
 - the current scaffold builds on newer odd-numbered Node releases, but that is not the preferred baseline
-- the existing static smoke pages remain the runtime reference until Angular reaches feature parity
+- deprecated daemon-served plain HTML browser assets now live under `../deprecated/web/`
