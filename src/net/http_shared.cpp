@@ -69,8 +69,12 @@ auto ReadFile(const std::filesystem::path& path) -> std::optional<std::string> {
 auto LoadHostUiAsset(const std::string_view relative_path) -> std::optional<std::string> {
   const auto cwd = std::filesystem::current_path();
   const std::vector<std::filesystem::path> candidates = {
+      cwd / "deprecated" / "web" / "host_ui" / relative_path,
+      cwd.parent_path() / "deprecated" / "web" / "host_ui" / relative_path,
+      cwd.parent_path().parent_path() / "deprecated" / "web" / "host_ui" / relative_path,
       cwd / "web" / "host_ui" / relative_path,
       cwd.parent_path() / "web" / "host_ui" / relative_path,
+      cwd.parent_path().parent_path() / "web" / "host_ui" / relative_path,
   };
 
   for (const auto& candidate : candidates) {
@@ -85,10 +89,15 @@ auto LoadHostUiAsset(const std::string_view relative_path) -> std::optional<std:
 auto LoadRemoteUiAsset(const std::string_view relative_path) -> std::optional<std::string> {
   const auto cwd = std::filesystem::current_path();
   const std::vector<std::filesystem::path> candidates = {
+      cwd / "deprecated" / "web" / "remote_client" / relative_path,
+      cwd.parent_path() / "deprecated" / "web" / "remote_client" / relative_path,
+      cwd.parent_path().parent_path() / "deprecated" / "web" / "remote_client" / relative_path,
       cwd / "web" / "remote_client" / relative_path,
       cwd.parent_path() / "web" / "remote_client" / relative_path,
+      cwd.parent_path().parent_path() / "web" / "remote_client" / relative_path,
       cwd / "tests_smoke" / "websocket_terminal.html",
       cwd.parent_path() / "tests_smoke" / "websocket_terminal.html",
+      cwd.parent_path().parent_path() / "tests_smoke" / "websocket_terminal.html",
   };
 
   for (const auto& candidate : candidates) {
@@ -105,6 +114,7 @@ auto LoadVendorAsset(const std::string_view relative_path) -> std::optional<std:
   const std::vector<std::filesystem::path> candidates = {
       cwd / "web" / "vendor" / relative_path,
       cwd.parent_path() / "web" / "vendor" / relative_path,
+      cwd.parent_path().parent_path() / "web" / "vendor" / relative_path,
   };
 
   for (const auto& candidate : candidates) {

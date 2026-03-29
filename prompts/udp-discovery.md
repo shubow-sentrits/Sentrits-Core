@@ -13,8 +13,8 @@ The runtime should:
 
 This is part of the runtime-side discovery contract already described in:
 
-- `development _memo/api_and_event_schema.md`
-- `development _memo/client_runtime_parallel_plan.md`
+- `development_memo/api_and_event_schema.md`
+- `development_memo/active_discovery_plan.md`
 
 ## Codebase Context
 

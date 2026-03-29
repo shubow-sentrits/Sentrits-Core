@@ -4,10 +4,10 @@ This repository currently provides:
 
 - `vibe-hostd` daemon
 - localhost-only host admin surface
-- daemon-served browser smoke client for remote attach/control
 - in-repo host-admin frontend workspace under `frontend/`
 - runtime APIs used by the maintained remote client in `~/dev/VibeEverywhere-Client`
 - UDP discovery support in the runtime
+- deprecated daemon-served plain HTML browser assets under `deprecated/web/`
 
 ## Build
 
@@ -208,6 +208,17 @@ Current dev behavior:
 
 - when served from the dev server, the host-admin app talks to `http://127.0.0.1:18085`
 - when eventually served by the daemon, it should use same-origin requests
+
+## Deprecated Daemon-Served Browser Assets
+
+The runtime still carries legacy daemon-served plain HTML browser assets for compatibility.
+
+They now live under:
+
+- `deprecated/web/host_ui`
+- `deprecated/web/remote_client`
+
+These are not the maintained frontend surfaces.
 
 Useful smoke actions:
 

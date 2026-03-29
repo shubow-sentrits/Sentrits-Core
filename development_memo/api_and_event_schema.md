@@ -49,6 +49,11 @@ Suggested fields:
 
 Serves the daemon-local host web app used for approval and configuration.
 
+Current note:
+
+- the daemon-served browser assets are now considered compatibility surfaces
+- maintained browser clients are developed outside this static asset bundle
+
 ### `POST /pairing/request`
 
 Suggested request:

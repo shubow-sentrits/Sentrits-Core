@@ -17,7 +17,7 @@ Also support a daemon-focused deployment mode:
 
 - `vibe-hostd --no-client`
 
-That mode should suppress launching or serving the bundled client-facing browser surfaces when the deployment only needs the runtime daemon.
+That mode should suppress launching or serving bundled client-facing browser surfaces when the deployment only needs the runtime daemon.
 
 ## Why This Is The Right Near-Term Shape
 
@@ -124,6 +124,12 @@ The bundled web client should be treated as:
 - potentially temporary or secondary long-term compared with native clients
 
 It should still remain a maintained product surface, but we should avoid forcing the whole system architecture to revolve around browser constraints.
+
+Current repo split:
+
+- maintained browser remote client: `/Users/shubow/dev/VibeEverywhere-Client`
+- maintained in-repo host-admin workspace: `frontend/`
+- deprecated daemon-served plain HTML browser assets: `deprecated/web/`
 
 ## Deployment Modes
 
@@ -241,11 +247,10 @@ The packaging architecture decision here is more important than the first instal
 
 ## Immediate Follow-Up Work
 
-1. add `--no-client` runtime option and define exactly what it suppresses
-2. define the host launcher/app-shell process model
-3. document storage/layout for bundled runtime, helper, and frontend assets
-4. decide whether host admin and bundled web client are opened in browser tabs or an embedded webview
-5. keep iOS fully independent from any browser-helper assumptions
+1. define the host launcher/app-shell process model
+2. document storage/layout for bundled runtime, helper, and frontend assets
+3. decide whether host admin and bundled web client are opened in browser tabs or an embedded webview
+4. keep iOS fully independent from any browser-helper assumptions
 
 ## Bottom Line
 
