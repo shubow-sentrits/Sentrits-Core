@@ -12,7 +12,29 @@ The runtime is implemented in C++20 with CMake, Ninja, and Clang/LLVM.
 - many observers, one controller
 - host-local `session-start` and `session-attach` use a privileged low-latency local controller stream
 - remote web and mobile clients use the HTTP and WebSocket observer/control API, including the dedicated remote controller WebSocket
+- supervision state is live and exposed as `active`, `quiet`, or `stopped`
+- attention state is conservative and derived from structured runtime signals
+- pairing, session inventory, session create/stop, and group tags are part of the maintained surface
 - file watching, process-tree inspection, and resource monitoring remain partially implemented seams rather than fully complete platform subsystems
+
+## Current Runtime MVP
+
+The current runtime MVP is:
+
+- daemon-managed PTY sessions for AI coding CLIs
+- host-local low-latency control through `session-start` and `session-attach`
+- remote observer and controller access for web and iOS clients
+- one-controller enforcement across host and remote clients
+- truthful session inventory with status, controller, supervision, and recent timestamps
+- pairing and bearer-token-based remote access on the local network
+
+The runtime is not yet trying to solve:
+
+- server-side terminal screen snapshots for perfect first-frame rendering
+- push-notification infrastructure
+- multi-user account management
+- internet relay or tunnel transport
+- fully complete platform monitoring subsystems
 
 ## Repository Surfaces
 
