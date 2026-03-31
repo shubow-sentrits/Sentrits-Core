@@ -2,6 +2,26 @@
 
 This directory now tracks the implementation-facing documents that still reflect the current runtime and client architecture.
 
+## Current Product Baseline
+
+Current maintained baseline:
+
+- runtime:
+  - one PTY per session
+  - many observers and one active controller
+  - privileged local host controller lane
+  - dedicated remote controller WebSocket for web and iOS
+  - supervision state exposed as `active`, `quiet`, or `stopped`
+- web:
+  - focused view is the live control surface
+  - explorer mini views are preview-only
+- iOS:
+  - Pairing, Inventory, Explorer, Activity, and Config tabs are live
+  - focused session view is the only interactive terminal surface
+  - local client-side notifications support subscribed `quiet` and `stopped` events
+
+If a document disagrees with the running code, the code is the source of truth.
+
 ## Core Runtime Docs
 
 - [architecture_refined.md](/Users/shubow/dev/VibeEverywhere/development_memo/architecture_refined.md)
@@ -15,7 +35,7 @@ This directory now tracks the implementation-facing documents that still reflect
 - [packaging_architecture.md](/Users/shubow/dev/VibeEverywhere/development_memo/packaging_architecture.md)
   - current host packaging and bundled-client direction
 - [known_limitations.md](/Users/shubow/dev/VibeEverywhere/development_memo/known_limitations.md)
-  - current documented limitations in attach rendering and host reclaim behavior
+  - current documented limitations in attach rendering, host reclaim behavior, and first-frame fidelity
 
 ## Current Client Docs
 
@@ -38,4 +58,5 @@ This directory now tracks the implementation-facing documents that still reflect
 
 - Deprecated daemon-served plain HTML browser assets now live under [deprecated/](/Users/shubow/dev/VibeEverywhere/deprecated/README.md).
 - The maintained browser remote client is no longer in this repo. It lives in `/Users/shubow/dev/VibeEverywhere-Client`.
+- The maintained iOS client lives in `/Users/shubow/dev/VibeEverywhereIOS`.
 - Remove or rewrite docs here when code changes invalidate them; implementation should remain the ground truth.
