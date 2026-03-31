@@ -288,7 +288,8 @@ void PrintUsage() {
   std::cout << "Usage:\n"
             << "  vibe-hostd serve [--admin-host HOST] [--admin-port PORT]"
                " [--remote-host HOST] [--remote-port PORT]"
-               " [--remote-cert PATH] [--remote-key PATH] [--no-discovery]\n"
+               " [--remote-cert PATH] [--remote-key PATH]"
+               " [--no-udp-discovery|--no-discovery]\n"
             << "  vibe-hostd local-pty [command [args...]]\n"
             << "  vibe-hostd session-start [--host HOST] [--port PORT] [title]\n"
             << "  vibe-hostd list [--host HOST] [--port PORT]\n"
@@ -389,7 +390,7 @@ auto main(const int argc, char** argv) -> int {
         index += 2;
         continue;
       }
-      if (argument == "--no-discovery") {
+      if (argument == "--no-udp-discovery" || argument == "--no-discovery") {
         enable_discovery = false;
         index += 1;
         continue;
