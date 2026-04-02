@@ -1,6 +1,6 @@
-# VibeEverywhere
+# Sentrits
 
-VibeEverywhere is a remote session runtime and control plane for AI coding CLIs.
+Sentrits-Core is a remote session runtime and control plane for AI coding CLIs.
 
 The runtime is implemented in C++20 with CMake, Ninja, and Clang/LLVM.
 
@@ -42,18 +42,18 @@ The runtime is not yet trying to solve:
   - runtime daemon, host-local admin/API surface, pairing, session management
 - `frontend/`
   - maintained in-repo host-admin workspace
-- `/Users/shubow/dev/VibeEverywhere-Client`
+- `Sentrits-Web`
   - maintained browser remote client
-- `/Users/shubow/dev/VibeEverywhereIOS`
+- `Sentrits-IOS`
   - maintained iOS client
 - `deprecated/web/`
   - legacy daemon-served plain HTML host and remote browser UIs kept for compatibility
 
 ## Start Here
 
-- [VIBING.md](/Users/shubow/dev/VibeEverywhere/VIBING.md)
-- [build_and_test.md](/Users/shubow/dev/VibeEverywhere/development_memo/build_and_test.md)
-- [architecture_refined.md](/Users/shubow/dev/VibeEverywhere/development_memo/architecture_refined.md)
-- [api_and_event_schema.md](/Users/shubow/dev/VibeEverywhere/development_memo/api_and_event_schema.md)
-- [packaging_architecture.md](/Users/shubow/dev/VibeEverywhere/development_memo/packaging_architecture.md)
-- [development_memo/README.md](/Users/shubow/dev/VibeEverywhere/development_memo/README.md)
+- [VIBING.md](Sentrits-Core/VIBING.md)
+- [build_and_test.md](Sentrits-Core/development_memo/build_and_test.md)
+- [architecture_refined.md](Sentrits-Core/development_memo/architecture_refined.md)
+- [api_and_event_schema.md](Sentrits-Core/development_memo/api_and_event_schema.md)
+- [packaging_architecture.md](Sentrits-Core/development_memo/packaging_architecture.md)
+- [development_memo/README.md](Sentrits-Core/development_memo/README.md)

@@ -8,7 +8,7 @@ Keep the host admin UI in the runtime repository.
 
 Move the maintained remote client into a separate repository:
 
-- `~/dev/VibeEverywhere-Client`
+- `../Sentrits-Web`
 
 Use the new React + Vite client repository as the maintained remote client implementation.
 
@@ -77,7 +77,7 @@ Runtime repository:
 
 Client repository:
 
-- `~/dev/VibeEverywhere-Client`
+- `../Sentrits-Web`
 - React + Vite application
 - remote client UX only
 

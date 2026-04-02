@@ -1,4 +1,4 @@
-# VibeEverywhere Agent Guide
+# Sentrits Agent Guide
 
 This repository is implementing `sentrits`, a local-network session runtime and supervision/control plane for AI coding CLIs.
 
@@ -12,13 +12,13 @@ This repository is implementing `sentrits`, a local-network session runtime and 
 
 ## Primary References
 
-- Product and implementation docs live in [development_memo](/Users/shubow/dev/VibeEverywhere/development_memo/README.md).
-- Runtime architecture is defined in [architecture_refined.md](/Users/shubow/dev/VibeEverywhere/development_memo/architecture_refined.md) and [session_runtime_and_pty.md](/Users/shubow/dev/VibeEverywhere/development_memo/session_runtime_and_pty.md).
-- Current REST and WebSocket contracts are defined in [api_and_event_schema.md](/Users/shubow/dev/VibeEverywhere/development_memo/api_and_event_schema.md).
-- iOS-facing API and architecture notes are in [client_api_ios.md](/Users/shubow/dev/VibeEverywhere/development_memo/client_api_ios.md) and [ios_client_architecture.md](/Users/shubow/dev/VibeEverywhere/development_memo/ios_client_architecture.md).
-- Browser remote-client notes are in [remote_web_client_v1.md](/Users/shubow/dev/VibeEverywhere/development_memo/remote_web_client_v1.md) and [privileged_remote_controller_plan.md](/Users/shubow/dev/VibeEverywhere/development_memo/privileged_remote_controller_plan.md).
-- Build and test workflow is defined in [build_and_test.md](/Users/shubow/dev/VibeEverywhere/development_memo/build_and_test.md).
-- TDD expectations are defined in [tdd_policy.md](/Users/shubow/dev/VibeEverywhere/development_memo/tdd_policy.md).
+- Product and implementation docs live in [development_memo](Sentrits-Core/development_memo/README.md).
+- Runtime architecture is defined in [architecture_refined.md](Sentrits-Core/development_memo/architecture_refined.md) and [session_runtime_and_pty.md](Sentrits-Core/development_memo/session_runtime_and_pty.md).
+- Current REST and WebSocket contracts are defined in [api_and_event_schema.md](Sentrits-Core/development_memo/api_and_event_schema.md).
+- iOS-facing API and architecture notes are in [client_api_ios.md](Sentrits-Core/development_memo/client_api_ios.md) and [ios_client_architecture.md](Sentrits-Core/development_memo/ios_client_architecture.md).
+- Browser remote-client notes are in [remote_web_client_v1.md](Sentrits-Core/development_memo/remote_web_client_v1.md) and [privileged_remote_controller_plan.md](Sentrits-Core/development_memo/privileged_remote_controller_plan.md).
+- Build and test workflow is defined in [build_and_test.md](Sentrits-Core/development_memo/build_and_test.md).
+- TDD expectations are defined in [tdd_policy.md](Sentrits-Core/development_memo/tdd_policy.md).
 
 ## Build Expectations
 
@@ -76,4 +76,4 @@ The repository is still being bootstrapped. As code is added, prefer this shape 
 ## Before Changing Architecture
 
 - Check whether the change affects session identity, PTY handling, buffering, client control semantics, host-attach behavior, or recovery guarantees.
-- Update the relevant detailed design markdown in [development_memo](/Users/shubow/dev/VibeEverywhere/development_memo/README.md) when the implementation direction changes materially.
+- Update the relevant detailed design markdown in [development_memo](Sentrits-Core/development_memo/README.md) when the implementation direction changes materially.

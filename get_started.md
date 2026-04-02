@@ -5,7 +5,7 @@ This repository currently provides:
 - `sentrits` daemon
 - localhost-only host admin surface
 - in-repo host-admin frontend workspace under `frontend/`
-- runtime APIs used by the maintained remote client in `~/dev/VibeEverywhere-Client`
+- runtime APIs used by the maintained remote client in `~/dev/Sentrits-Web`
 - UDP discovery support in the runtime
 - deprecated daemon-served plain HTML browser assets under `deprecated/web/`
 
@@ -59,10 +59,10 @@ Default dev URL:
 
 The maintained remote client now lives in:
 
-- `~/dev/VibeEverywhere-Client`
+- `~/dev/Sentrits-Web`
 
 ```bash
-cd ~/dev/VibeEverywhere-Client
+cd ~/dev/Sentrits-Web
 npm install
 npm test
 npm run lint
@@ -260,7 +260,7 @@ Start the daemon first:
 Then in another shell:
 
 ```bash
-cd ~/dev/VibeEverywhere-Client
+cd ~/dev/Sentrits-Web
 npm run dev
 ```
 
@@ -346,7 +346,7 @@ nc -luk 18087
 
 Use the current smoke checklist in:
 
-- [tests_smoke/mvp_smoke_checklist.md](/Users/shubow/dev/VibeEverywhere/tests_smoke/mvp_smoke_checklist.md)
+- [tests_smoke/mvp_smoke_checklist.md](Sentrits-Core/tests_smoke/mvp_smoke_checklist.md)
 
 ## Current Notes
 

@@ -1,6 +1,6 @@
 # Test-Driven Development Policy
 
-VibeEverywhere should be built with a test-driven development mindset.
+Sentrits-Core should be built with a test-driven development mindset.
 
 ## Default Rule
 
