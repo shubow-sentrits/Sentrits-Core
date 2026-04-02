@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /Users/shubow/dev/VibeEverywhere
+cd Sentrits-Core
 exec ./build/sentrits serve

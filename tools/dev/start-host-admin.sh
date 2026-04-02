@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /Users/shubow/dev/VibeEverywhere/frontend
+cd ./frontend
 exec npm run start:host-admin
