@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd /Users/shubow/dev/VibeEverywhere-Client
+cd ../Sentrits-Web
 exec npm run discovery-helper
