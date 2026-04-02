@@ -38,11 +38,6 @@ npm run start:remote-client
 
 Tests:
 
-```bash
-npm run test:host-admin
-npm run test:remote-client
-```
-
 ## Notes
 
 - use an LTS Node release for normal frontend development

@@ -1,6 +1,6 @@
 # Build and Test Workflow
 
-This document defines the standard build and test workflow for VibeEverywhere.
+This document defines the standard build and test workflow for Sentrits-Core.
 
 ## Toolchain Baseline
 
@@ -94,7 +94,7 @@ npm run start:remote-client
 
 Notes:
 
-- the maintained browser remote client product now lives in `/Users/shubow/dev/VibeEverywhere-Client`
+- the maintained browser remote client product now lives in `Sentrits-Web`
 - the daemon-served plain HTML browser assets are deprecated and now live under `deprecated/web/`
 - keep `frontend/` documentation and commands aligned with what still builds in this repo
 
@@ -125,7 +125,7 @@ Before a change is considered ready:
 - platform-facing assumptions remain explicit enough to review
 - all relevant automated tests pass
 - full `ctest` run passes locally
-- any design-impacting change updates the corresponding markdown under [development_memo](/Users/shubow/dev/VibeEverywhere/development_memo/README.md)
+- any design-impacting change updates the corresponding markdown under [development_memo](Sentrits-Core/development_memo/README.md)
 
 Platform guardrails for this repo:
 

@@ -1,6 +1,6 @@
 # Packaging Architecture
 
-This document defines how VibeEverywhere should be packaged across host and client surfaces.
+This document defines how Sentrits should be packaged across host and client surfaces.
 
 It is not the final distribution spec for every platform. It is the product and systems decision that should guide the next implementation phase.
 
@@ -127,7 +127,7 @@ It should still remain a maintained product surface, but we should avoid forcing
 
 Current repo split:
 
-- maintained browser remote client: `/Users/shubow/dev/VibeEverywhere-Client`
+- maintained browser remote client: `../Sentrits-Web`
 - maintained in-repo host-admin workspace: `frontend/`
 - deprecated daemon-served plain HTML browser assets: `deprecated/web/`
 

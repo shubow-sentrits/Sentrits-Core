@@ -9,5 +9,5 @@ Current contents:
 - `web/remote_client`
   - legacy daemon-served plain HTML remote client
 
-The maintained browser client now lives in `/Users/shubow/dev/VibeEverywhere-Client`.
+The maintained browser client now lives in `Sentrits-Web`.
 The maintained host-admin workspace in this repo lives under `frontend/`.

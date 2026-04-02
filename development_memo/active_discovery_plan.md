@@ -18,7 +18,7 @@ What is **not** ready is true client-side automatic discovery in the maintained 
 
 ## Constraint
 
-The maintained client in `~/dev/VibeEverywhere-Client` is a browser app built on Vite/React.
+The maintained client in `Sentrits-Web` is a browser app built on Vite/React.
 
 Browsers do not expose raw UDP sockets for LAN broadcast receive. That means:
 
@@ -122,7 +122,7 @@ Scope:
 
 Repo:
 
-- `~/dev/VibeEverywhere-Client`
+- `~/dev/Sentrits-Web`
 
 Scope:
 
