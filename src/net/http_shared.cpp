@@ -15,6 +15,7 @@
 #include "vibe/net/discovery.h"
 #include "vibe/net/json.h"
 #include "vibe/net/request_parsing.h"
+#include "vibe/base/debug_trace.h"
 
 namespace vibe::net {
 
@@ -45,6 +46,21 @@ auto ParseUnsignedQueryValue(const std::string& target, const std::string_view k
 auto MakeSnapshotResponse(const HttpRequest& request, const vibe::session::SessionSnapshot& snapshot,
                           const std::optional<vibe::session::TerminalViewportSnapshot>& viewport_snapshot)
     -> HttpResponse {
+  std::ostringstream trace;
+  trace << "session=" << snapshot.metadata.id.value() << " seq=" << snapshot.current_sequence
+        << " screen=" << (snapshot.terminal_screen.has_value() ? "yes" : "no")
+        << " viewport=" << (viewport_snapshot.has_value() ? "yes" : "no");
+  if (snapshot.terminal_screen.has_value()) {
+    trace << " screenRev=" << snapshot.terminal_screen->render_revision
+          << " screenLines=" << snapshot.terminal_screen->visible_lines.size()
+          << " scrollback=" << snapshot.terminal_screen->scrollback_lines.size();
+  }
+  if (viewport_snapshot.has_value()) {
+    trace << " viewId=" << viewport_snapshot->view_id << " cols=" << viewport_snapshot->columns
+          << " rows=" << viewport_snapshot->rows << " viewRev=" << viewport_snapshot->render_revision;
+  }
+  vibe::base::DebugTrace("core.focus", "snapshot.response", trace.str());
+
   json::object snapshot_json;
   snapshot_json["sessionId"] = snapshot.metadata.id.value();
   snapshot_json["provider"] = std::string(vibe::session::ToString(snapshot.metadata.provider));
@@ -1084,6 +1100,12 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
       const auto cols = ParseUnsignedQueryValue(target, "cols");
       const auto rows = ParseUnsignedQueryValue(target, "rows");
       if (!view_id.empty() && cols.has_value() && rows.has_value()) {
+        {
+          std::ostringstream trace;
+          trace << "session=" << session_id << " viewId=" << view_id << " cols=" << *cols
+                << " rows=" << *rows;
+          vibe::base::DebugTrace("core.focus", "snapshot.request", trace.str());
+        }
         const bool updated = session_manager.UpdateViewport(
             session_id, view_id,
             vibe::session::TerminalSize{
