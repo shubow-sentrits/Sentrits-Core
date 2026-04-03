@@ -8,10 +8,12 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <utility>
 
 #include "vibe/service/git_inspector.h"
 #include "vibe/service/workspace_file_watcher.h"
+#include "vibe/base/debug_trace.h"
 #include "vibe/session/provider_config.h"
 #include "vibe/session/session_record.h"
 
@@ -800,6 +802,12 @@ auto SessionManager::UpdateViewport(const std::string& session_id, const std::st
     return false;
   }
 
+  {
+    std::ostringstream trace;
+    trace << "session=" << session_id << " viewId=" << view_id << " cols=" << viewport_size.columns
+          << " rows=" << viewport_size.rows;
+    vibe::base::DebugTrace("core.focus", "viewport.update", trace.str());
+  }
   entry->runtime->UpdateViewport(view_id, viewport_size);
   return true;
 }
