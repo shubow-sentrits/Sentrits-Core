@@ -6,6 +6,7 @@
 
 #include "vibe/session/launch_spec.h"
 #include "vibe/session/pty_process.h"
+#include "vibe/session/terminal_debug_artifact.h"
 #include "vibe/session/session_output_buffer.h"
 #include "vibe/session/session_record.h"
 #include "vibe/session/terminal_multiplexer.h"
@@ -50,6 +51,7 @@ class SessionRuntime {
   std::optional<ProcessId> pid_;
   SessionOutputBuffer output_buffer_;
   TerminalMultiplexer terminal_multiplexer_;
+  TerminalDebugRecorder debug_recorder_;
 };
 
 }  // namespace vibe::session

@@ -10,7 +10,8 @@ SessionRuntime::SessionRuntime(SessionRecord record, LaunchSpec launch_spec, IPt
       launch_spec_(std::move(launch_spec)),
       pty_process_(pty_process),
       output_buffer_(output_buffer_capacity_bytes),
-      terminal_multiplexer_(launch_spec_.terminal_size) {
+      terminal_multiplexer_(launch_spec_.terminal_size),
+      debug_recorder_(record_.metadata().id.value()) {
   record_.SetTerminalScreen(terminal_multiplexer_.snapshot());
 }
 
@@ -70,6 +71,9 @@ auto SessionRuntime::ResizeTerminal(const TerminalSize terminal_size) -> bool {
 
 void SessionRuntime::UpdateViewport(const std::string_view view_id, const TerminalSize viewport_size) {
   terminal_multiplexer_.UpdateViewport(view_id, viewport_size);
+  if (const auto viewport = terminal_multiplexer_.viewport_snapshot(view_id); viewport.has_value()) {
+    debug_recorder_.RecordViewport(view_id, *viewport);
+  }
 }
 
 void SessionRuntime::RemoveViewport(const std::string_view view_id) {
@@ -170,6 +174,8 @@ void SessionRuntime::PollOnce(const int read_timeout_ms) {
       record_.SetCurrentSequence(output_buffer_.next_sequence() - 1);
       record_.SetRecentTerminalTail(output_buffer_.Tail(64U * 1024U).data);
       record_.SetTerminalScreen(terminal_multiplexer_.snapshot());
+      debug_recorder_.RecordPtyOutput(read_result.data, record_.snapshot().current_sequence,
+                                      *record_.snapshot().terminal_screen);
     }
 
     if (read_result.closed) {

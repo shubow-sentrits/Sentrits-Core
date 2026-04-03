@@ -31,6 +31,7 @@ TEST(SessionSnapshotTest, CarriesLightweightRecoveryState) {
               .cursor_column = 5,
               .visible_lines = {"Running tests...", "Done."},
               .scrollback_lines = {"Booting"},
+              .bootstrap_ansi = "\x1b[2J\x1b[HRunning tests...\x1b[EDone.",
           },
       .signals =
           SessionSignals{
@@ -74,6 +75,7 @@ TEST(SessionSnapshotTest, CarriesLightweightRecoveryState) {
   EXPECT_EQ(snapshot.terminal_screen->render_revision, 7U);
   EXPECT_EQ(snapshot.terminal_screen->visible_lines, (std::vector<std::string>{"Running tests...", "Done."}));
   EXPECT_EQ(snapshot.terminal_screen->scrollback_lines, (std::vector<std::string>{"Booting"}));
+  EXPECT_EQ(snapshot.terminal_screen->bootstrap_ansi, "\x1b[2J\x1b[HRunning tests...\x1b[EDone.");
   EXPECT_EQ(snapshot.signals.last_output_at_unix_ms, std::optional<std::int64_t>{100});
   EXPECT_EQ(snapshot.signals.last_activity_at_unix_ms, std::optional<std::int64_t>{110});
   EXPECT_EQ(snapshot.signals.last_file_change_at_unix_ms, std::optional<std::int64_t>{110});

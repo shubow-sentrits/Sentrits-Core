@@ -21,6 +21,7 @@ struct TerminalScreenSnapshot {
   std::size_t cursor_column{0};
   std::vector<std::string> visible_lines;
   std::vector<std::string> scrollback_lines;
+  std::string bootstrap_ansi;
 };
 
 struct TerminalViewportState {
@@ -43,6 +44,7 @@ struct TerminalViewportSnapshot {
   std::optional<std::size_t> cursor_viewport_row;
   std::optional<std::size_t> cursor_viewport_column;
   std::vector<std::string> visible_lines;
+  std::string bootstrap_ansi;
 
   [[nodiscard]] auto operator==(const TerminalViewportSnapshot& other) const -> bool = default;
 };
