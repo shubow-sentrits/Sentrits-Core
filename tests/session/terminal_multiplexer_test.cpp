@@ -30,6 +30,28 @@ TEST(TerminalMultiplexerTest, SupportsBasicCursorAndEraseSequences) {
   EXPECT_EQ(snapshot.cursor_column, 5U);
 }
 
+TEST(TerminalMultiplexerTest, PreservesUtf8BoxDrawingCharacters) {
+  TerminalMultiplexer multiplexer(TerminalSize{.columns = 8, .rows = 2}, 4);
+
+  multiplexer.Append("╭──╮\r\n│ok│");
+
+  const TerminalScreenSnapshot snapshot = multiplexer.snapshot();
+  ASSERT_EQ(snapshot.visible_lines.size(), 2U);
+  EXPECT_EQ(snapshot.visible_lines[0], "╭──╮");
+  EXPECT_EQ(snapshot.visible_lines[1], "│ok│");
+}
+
+TEST(TerminalMultiplexerTest, EmitsStyledBootstrapAnsiForVisibleScreen) {
+  TerminalMultiplexer multiplexer(TerminalSize{.columns = 8, .rows = 2}, 4);
+
+  multiplexer.Append("\x1b[31mred\x1b[0m");
+
+  const TerminalScreenSnapshot snapshot = multiplexer.snapshot();
+  EXPECT_NE(snapshot.bootstrap_ansi.find("\x1b[2J\x1b[H"), std::string::npos);
+  EXPECT_NE(snapshot.bootstrap_ansi.find("red"), std::string::npos);
+  EXPECT_NE(snapshot.bootstrap_ansi.find("38;2;"), std::string::npos);
+}
+
 TEST(TerminalMultiplexerTest, ResizePreservesBottomVisibleRegionAndIncrementsRevision) {
   TerminalMultiplexer multiplexer(TerminalSize{.columns = 10, .rows = 4}, 10);
   multiplexer.Append("l1\r\nl2\r\nl3\r\nl4");

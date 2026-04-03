@@ -125,6 +125,73 @@ auto ClipUtf8Columns(const std::string& line, const std::size_t start_column,
   return clipped;
 }
 
+auto HasAnyStyle(const VTermScreenCell& cell) -> bool {
+  return cell.attrs.bold || cell.attrs.underline != VTERM_UNDERLINE_OFF || cell.attrs.italic ||
+         cell.attrs.blink || cell.attrs.reverse || cell.attrs.conceal || cell.attrs.strike ||
+         !VTERM_COLOR_IS_DEFAULT_FG(&cell.fg) || !VTERM_COLOR_IS_DEFAULT_BG(&cell.bg);
+}
+
+auto SameStyle(const VTermScreenCell& left, const VTermScreenCell& right) -> bool {
+  return left.attrs.bold == right.attrs.bold && left.attrs.underline == right.attrs.underline &&
+         left.attrs.italic == right.attrs.italic && left.attrs.blink == right.attrs.blink &&
+         left.attrs.reverse == right.attrs.reverse && left.attrs.conceal == right.attrs.conceal &&
+         left.attrs.strike == right.attrs.strike && vterm_color_is_equal(&left.fg, &right.fg) &&
+         vterm_color_is_equal(&left.bg, &right.bg);
+}
+
+void AppendColorSgr(std::string& out, VTermScreen* screen, const VTermColor& color, const bool foreground) {
+  if ((foreground && VTERM_COLOR_IS_DEFAULT_FG(&color)) || (!foreground && VTERM_COLOR_IS_DEFAULT_BG(&color))) {
+    return;
+  }
+
+  VTermColor rgb = color;
+  vterm_screen_convert_color_to_rgb(screen, &rgb);
+  out.append(foreground ? ";38;2;" : ";48;2;");
+  out.append(std::to_string(rgb.rgb.red));
+  out.push_back(';');
+  out.append(std::to_string(rgb.rgb.green));
+  out.push_back(';');
+  out.append(std::to_string(rgb.rgb.blue));
+}
+
+void AppendFullStyleSgr(std::string& out, VTermScreen* screen, const VTermScreenCell& cell) {
+  out.append("\x1b[0");
+  if (cell.attrs.bold) {
+    out.append(";1");
+  }
+  if (cell.attrs.italic) {
+    out.append(";3");
+  }
+  switch (cell.attrs.underline) {
+    case VTERM_UNDERLINE_SINGLE:
+      out.append(";4");
+      break;
+    case VTERM_UNDERLINE_DOUBLE:
+      out.append(";21");
+      break;
+    case VTERM_UNDERLINE_CURLY:
+      out.append(";4:3");
+      break;
+    default:
+      break;
+  }
+  if (cell.attrs.blink) {
+    out.append(";5");
+  }
+  if (cell.attrs.reverse) {
+    out.append(";7");
+  }
+  if (cell.attrs.conceal) {
+    out.append(";8");
+  }
+  if (cell.attrs.strike) {
+    out.append(";9");
+  }
+  AppendColorSgr(out, screen, cell.fg, true);
+  AppendColorSgr(out, screen, cell.bg, false);
+  out.push_back('m');
+}
+
 }  // namespace
 
 class TerminalMultiplexer::Impl {
@@ -135,6 +202,8 @@ class TerminalMultiplexer::Impl {
         vt_(vterm_new(static_cast<int>(terminal_size_.rows), static_cast<int>(terminal_size_.columns))),
         state_(vterm_obtain_state(vt_)),
         screen_(vterm_obtain_screen(vt_)) {
+    vterm_set_utf8(vt_, 1);
+
     screen_callbacks_ = VTermScreenCallbacks{
         .damage = &Impl::OnDamage,
         .moverect = nullptr,
@@ -266,6 +335,7 @@ class TerminalMultiplexer::Impl {
         .cursor_viewport_row = std::nullopt,
         .cursor_viewport_column = std::nullopt,
         .visible_lines = {},
+        .bootstrap_ansi = {},
     };
 
     viewport_snapshot.visible_lines.reserve(viewport_rows);
@@ -287,6 +357,11 @@ class TerminalMultiplexer::Impl {
         viewport_snapshot.cursor_viewport_column = snapshot_.cursor_column - horizontal_offset;
       }
     }
+
+    viewport_snapshot.bootstrap_ansi =
+        BuildViewportBootstrapAnsi(viewport_top_line, horizontal_offset, viewport_columns, viewport_rows,
+                                   scrollback_count, total_line_count, viewport_snapshot.cursor_viewport_row,
+                                   viewport_snapshot.cursor_viewport_column);
 
     return viewport_snapshot;
   }
@@ -314,13 +389,135 @@ class TerminalMultiplexer::Impl {
         static_cast<void>(vterm_screen_get_cell(screen_, VTermPos{.row = row, .col = col}, &cell));
         cells[static_cast<std::size_t>(col)] = cell;
       }
-      snapshot_.visible_lines.push_back(CellsToUtf8Line(cells.data(), row >= 0 ? static_cast<int>(terminal_size_.columns) : 0));
+      snapshot_.visible_lines.push_back(
+          CellsToUtf8Line(cells.data(), row >= 0 ? static_cast<int>(terminal_size_.columns) : 0));
     }
 
     VTermPos cursor{};
     vterm_state_get_cursorpos(state_, &cursor);
     snapshot_.cursor_row = cursor.row >= 0 ? static_cast<std::size_t>(cursor.row) : 0U;
     snapshot_.cursor_column = cursor.col >= 0 ? static_cast<std::size_t>(cursor.col) : 0U;
+    snapshot_.bootstrap_ansi = BuildScreenBootstrapAnsi();
+  }
+
+  [[nodiscard]] auto BuildStyledVisibleRow(const std::size_t row_index, const std::size_t start_column,
+                                           const std::size_t max_columns) const -> std::string {
+    if (row_index >= terminal_size_.rows || max_columns == 0) {
+      return "";
+    }
+
+    const std::size_t end_column =
+        std::min<std::size_t>(terminal_size_.columns, start_column + max_columns);
+    std::string out;
+    bool have_style = false;
+    VTermScreenCell active_style{};
+
+    for (std::size_t column = start_column; column < end_column; ++column) {
+      VTermScreenCell cell{};
+      static_cast<void>(vterm_screen_get_cell(
+          screen_, VTermPos{.row = static_cast<int>(row_index), .col = static_cast<int>(column)}, &cell));
+      if (cell.width == 0) {
+        continue;
+      }
+
+      if (!have_style || !SameStyle(active_style, cell)) {
+        if (HasAnyStyle(cell)) {
+          AppendFullStyleSgr(out, screen_, cell);
+        } else if (have_style) {
+          out.append("\x1b[0m");
+        }
+        active_style = cell;
+        have_style = true;
+      }
+
+      bool emitted = false;
+      for (const uint32_t codepoint : cell.chars) {
+        if (codepoint == 0U) {
+          break;
+        }
+        AppendUtf8(out, codepoint);
+        emitted = true;
+      }
+      if (!emitted) {
+        out.push_back(' ');
+      }
+    }
+
+    if (have_style) {
+      out.append("\x1b[0m");
+    }
+    return out;
+  }
+
+  [[nodiscard]] auto BuildScreenBootstrapAnsi() const -> std::string {
+    std::string out;
+    if (!snapshot_.scrollback_lines.empty()) {
+      out.append(snapshot_.scrollback_lines.front());
+      for (std::size_t index = 1; index < snapshot_.scrollback_lines.size(); ++index) {
+        out.append("\r\n");
+        out.append(snapshot_.scrollback_lines[index]);
+      }
+      out.append("\r\n");
+    }
+
+    out.append("\x1b[2J\x1b[H");
+    for (std::size_t row = 0; row < terminal_size_.rows; ++row) {
+      out.append(BuildStyledVisibleRow(row, 0U, terminal_size_.columns));
+      if (row + 1U < terminal_size_.rows) {
+        out.append("\x1b[E");
+      }
+    }
+    out.append("\x1b[");
+    out.append(std::to_string(snapshot_.cursor_row + 1U));
+    out.push_back(';');
+    out.append(std::to_string(snapshot_.cursor_column + 1U));
+    out.push_back('H');
+    return out;
+  }
+
+  [[nodiscard]] auto BuildViewportBootstrapAnsi(
+      const std::size_t viewport_top_line, const std::size_t horizontal_offset, const std::size_t viewport_columns,
+      const std::size_t viewport_rows, const std::size_t scrollback_count, const std::size_t total_line_count,
+      const std::optional<std::size_t>& cursor_row, const std::optional<std::size_t>& cursor_column) const
+      -> std::string {
+    std::string out;
+    if (viewport_top_line > 0) {
+      const std::size_t history_count = std::min(viewport_top_line, total_line_count);
+      for (std::size_t index = 0; index < history_count; ++index) {
+        if (index > 0) {
+          out.append("\r\n");
+        }
+        if (index < snapshot_.scrollback_lines.size()) {
+          out.append(ClipUtf8Columns(snapshot_.scrollback_lines[index], horizontal_offset, viewport_columns));
+          continue;
+        }
+        const std::size_t screen_row = index - scrollback_count;
+        out.append(BuildStyledVisibleRow(screen_row, horizontal_offset, viewport_columns));
+      }
+      out.append("\r\n");
+    }
+
+    out.append("\x1b[2J\x1b[H");
+    for (std::size_t row = 0; row < viewport_rows; ++row) {
+      const std::size_t line_index = viewport_top_line + row;
+      if (line_index < scrollback_count) {
+        out.append(ClipUtf8Columns(snapshot_.scrollback_lines[line_index], horizontal_offset, viewport_columns));
+      } else if (line_index < total_line_count) {
+        out.append(BuildStyledVisibleRow(line_index - scrollback_count, horizontal_offset, viewport_columns));
+      }
+      if (row + 1U < viewport_rows) {
+        out.append("\x1b[E");
+      }
+    }
+
+    if (cursor_row.has_value() && cursor_column.has_value()) {
+      out.append("\x1b[");
+      out.append(std::to_string(*cursor_row + 1U));
+      out.push_back(';');
+      out.append(std::to_string(*cursor_column + 1U));
+      out.push_back('H');
+    }
+    return out;
   }
 
   void PushScrollbackLine(const std::string& line) {

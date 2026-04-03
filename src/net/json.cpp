@@ -200,6 +200,7 @@ auto ToJson(const vibe::session::SessionSnapshot& snapshot) -> std::string {
     terminal_screen["cursorColumn"] = snapshot.terminal_screen->cursor_column;
     terminal_screen["visibleLines"] = json::value_from(snapshot.terminal_screen->visible_lines);
     terminal_screen["scrollbackLines"] = json::value_from(snapshot.terminal_screen->scrollback_lines);
+    terminal_screen["bootstrapAnsi"] = snapshot.terminal_screen->bootstrap_ansi;
     object["terminalScreen"] = std::move(terminal_screen);
   }
   object["recentFileChanges"] = json::value_from(snapshot.recent_file_changes);
