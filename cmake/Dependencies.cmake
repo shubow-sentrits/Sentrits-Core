@@ -30,7 +30,7 @@ if(NOT TARGET vterm_vendor)
   )
 endif()
 
-if(VIBE_BUILD_TESTS)
+if(SENTRITS_BUILD_TESTS)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   FetchContent_Declare(
     googletest

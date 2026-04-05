@@ -49,7 +49,7 @@ Common target-specific builds:
 
 ```bash
 cmake --build build --target sentrits
-cmake --build build --target vibe_tests
+cmake --build build --target sentrits_tests
 ```
 
 ## Test
