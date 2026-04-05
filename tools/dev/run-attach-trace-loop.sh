@@ -108,7 +108,7 @@ summarize_run() {
 for i in $(seq 1 "${runs}"); do
   run_dir="$(mktemp -d "${TMPDIR:-/tmp}/vibe-attach-run-${i}-XXXXXX")"
   echo "--- run ${i} ---"
-  if ! VIBE_TRACE_DIR="${run_dir}" ./build/vibe_tests --gtest_also_run_disabled_tests "--gtest_filter=${filter}"; then
+  if ! VIBE_TRACE_DIR="${run_dir}" ./build/sentrits_tests --gtest_also_run_disabled_tests "--gtest_filter=${filter}"; then
     echo "--- failed run ${i} ---"
     summarize_run "${run_dir}"
     exit 1

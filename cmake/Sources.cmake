@@ -28,7 +28,7 @@ set(VIBE_CORE_SOURCES
   src/session/session_lifecycle.cpp
 )
 
-set(VIBE_TEST_SOURCES
+set(SENTRITS_TEST_SOURCES
   tests/auth/auth_core_test.cpp
   tests/auth_store/interface_contract_test.cpp
   tests/cli/daemon_client_test.cpp
