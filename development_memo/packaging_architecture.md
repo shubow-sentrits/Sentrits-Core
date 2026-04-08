@@ -78,8 +78,16 @@ Target shape:
 
 - installed runtime binary
 - packaged static assets
-- `launchd` service integration
+- per-user `launchd` agent integration
 - optional higher-level app shell later, but not required for the core product
+
+Bootstrap model:
+
+- install shared runtime bits
+- install or link a per-user plist under `~/Library/LaunchAgents`
+- let the logged-in user enable and start it explicitly, preferably through the CLI
+- current CLI bootstrap path: `sentrits service install`
+- service is session-bound and does not persist after logout
 
 ### Debian
 
@@ -87,8 +95,16 @@ Target shape:
 
 - installed runtime binary
 - packaged static assets
-- `systemd` service unit
+- user-scoped `systemd` service unit
 - `.deb` package first
+
+Bootstrap model:
+
+- the `.deb` installs shared files, including the user-unit template
+- package install does not try to enable the unit for arbitrary accounts
+- the local user enables and starts the user unit explicitly, preferably through the CLI
+- current CLI bootstrap path: `sentrits service install`
+- service is session-bound and does not use linger
 
 ## Filesystem Model
 
@@ -97,13 +113,17 @@ Representative install layout:
 - binary:
   - `/usr/bin/sentrits` on Debian
 - static web assets:
-  - runtime-owned packaged asset directory
+  - runtime-owned packaged asset directory such as `/usr/lib/sentrits/www`
+- macOS launch agent:
+  - `~/Library/LaunchAgents/io.sentrits.agent.plist`
+- Debian user unit template:
+  - `/usr/lib/systemd/user/sentrits.service`
 - config:
-  - daemon-owned config location
+  - user-scoped config location
 - state:
-  - daemon-owned persistent state location
+  - user-scoped persistent state location
 - logs:
-  - system-managed logging by default
+  - user-scoped journal or explicitly configured file logging
 
 Exact install paths can vary by platform, but the split between binary, assets, config, and state should stay explicit.
 
@@ -118,6 +138,14 @@ High-level flow:
 3. build the web client static assets
 4. copy those assets into the runtime packaging/staging tree
 5. generate platform installer artifacts
+
+Current repo support:
+
+- the runtime can load packaged assets from a compiled default web root
+- build integration generates service templates for `launchd` and `systemd --user`
+- a `sentrits_stage_web_assets` target stages the neighboring `../Sentrits-Web/dist` output into `build/packaging/www`
+- staged packaging records the exact `Sentrits-Web` revision used for the asset bundle
+- a Linux `sentrits_package_deb` target can generate a first-pass `.deb` from the current build tree
 
 Recommended revision model:
 
