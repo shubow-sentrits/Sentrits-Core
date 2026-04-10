@@ -701,13 +701,6 @@ auto AttachSessionLocal(const std::string& session_id) -> int {
     return 1;
   }
 
-  const auto initial_redraw = BuildLocalControllerFrame('I', std::string_view("\f", 1));
-  asio::write(socket, asio::buffer(initial_redraw), error_code);
-  if (error_code) {
-    std::cerr << "local controller initial redraw failed: " << error_code.message() << '\n';
-    return 1;
-  }
-
   std::atomic<bool> stop_requested{false};
   std::atomic<bool> read_failed{false};
   std::string read_error_message;
@@ -717,7 +710,6 @@ auto AttachSessionLocal(const std::string& session_id) -> int {
   ScopedSignalHandler window_resize_handler(SIGWINCH, HandleWindowResizeSignal);
   auto last_terminal_size = initial_terminal_size;
   bool resize_sync_pending = false;
-  bool redraw_sync_pending = false;
   bool stdin_open = true;
 
   std::thread reader_thread([&]() {
@@ -763,20 +755,8 @@ auto AttachSessionLocal(const std::string& session_id) -> int {
         stop_requested.store(true);
         break;
       }
-      trace_logger.Log("ws.write.resize");
+        trace_logger.Log("ws.write.resize");
       resize_sync_pending = false;
-      redraw_sync_pending = true;
-    }
-
-    if (redraw_sync_pending) {
-      const auto frame = BuildLocalControllerFrame('I', std::string_view("\f", 1));
-      asio::write(socket, asio::buffer(frame), error_code);
-      if (error_code) {
-        stop_requested.store(true);
-        break;
-      }
-      trace_logger.Log("ws.write.redraw_after_resize", 1);
-      redraw_sync_pending = false;
     }
 
     fd_set read_fds;
@@ -820,15 +800,6 @@ auto AttachSessionLocal(const std::string& session_id) -> int {
           break;
         }
         trace_logger.Log("ws.write.reclaim", static_cast<std::size_t>(bytes_read));
-
-        // Force the PTY app to repaint after a reclaimed controller resize invalidates the old layout.
-        const auto redraw_frame = BuildLocalControllerFrame('I', std::string_view("\f", 1));
-        asio::write(socket, asio::buffer(redraw_frame), error_code);
-        if (error_code) {
-          stop_requested.store(true);
-          break;
-        }
-        trace_logger.Log("ws.write.redraw_after_reclaim", 1);
       }
 
       if (!filtered.payload.empty()) {

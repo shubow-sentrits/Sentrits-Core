@@ -6,11 +6,14 @@
 #include <deque>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include "vibe/base/debug_trace.h"
 
 extern "C" {
 #include "vterm.h"
@@ -24,6 +27,55 @@ auto TrimRight(std::string value) -> std::string {
     value.pop_back();
   }
   return value;
+}
+
+auto ContainsSequence(const std::string_view input, const std::string_view needle) -> bool {
+  return input.find(needle) != std::string_view::npos;
+}
+
+auto BuildAppendTraceSummary(const std::string_view data) -> std::optional<std::string> {
+  std::vector<std::string_view> tags;
+  if (ContainsSequence(data, "\x1b[?1049h")) {
+    tags.emplace_back("alt-enter-1049");
+  }
+  if (ContainsSequence(data, "\x1b[?1049l")) {
+    tags.emplace_back("alt-exit-1049");
+  }
+  if (ContainsSequence(data, "\x1b[?1047h")) {
+    tags.emplace_back("alt-enter-1047");
+  }
+  if (ContainsSequence(data, "\x1b[?1047l")) {
+    tags.emplace_back("alt-exit-1047");
+  }
+  if (ContainsSequence(data, "\x1b[?47h")) {
+    tags.emplace_back("alt-enter-47");
+  }
+  if (ContainsSequence(data, "\x1b[?47l")) {
+    tags.emplace_back("alt-exit-47");
+  }
+  if (ContainsSequence(data, "\x1b[2J")) {
+    tags.emplace_back("clear-2J");
+  }
+  if (ContainsSequence(data, "\x1b[3J")) {
+    tags.emplace_back("clear-3J");
+  }
+  if (ContainsSequence(data, "\x1b[H")) {
+    tags.emplace_back("cursor-home");
+  }
+
+  if (tags.empty()) {
+    return std::nullopt;
+  }
+
+  std::ostringstream summary;
+  summary << "bytes=" << data.size() << " tags=";
+  for (std::size_t index = 0; index < tags.size(); ++index) {
+    if (index > 0) {
+      summary << ',';
+    }
+    summary << tags[index];
+  }
+  return summary.str();
 }
 
 void AppendUtf8(std::string& out, const uint32_t codepoint) {
@@ -250,6 +302,12 @@ class TerminalMultiplexer::Impl {
       return;
     }
 
+    const std::size_t scrollback_before = scrollback_lines_.size();
+    const std::uint64_t render_revision_before = render_revision_;
+    if (const auto summary = BuildAppendTraceSummary(data); summary.has_value()) {
+      vibe::base::DebugTrace("core.terminal", "append.escape", *summary);
+    }
+
     dirty_ = false;
     static_cast<void>(vterm_input_write(vt_, data.data(), data.size()));
     vterm_screen_flush_damage(screen_);
@@ -259,6 +317,14 @@ class TerminalMultiplexer::Impl {
       snapshot_.render_revision = render_revision_;
       dirty_ = false;
     }
+
+    std::ostringstream trace;
+    trace << "bytes=" << data.size() << " scrollbackBefore=" << scrollback_before
+          << " scrollbackAfter=" << scrollback_lines_.size()
+          << " renderRevisionBefore=" << render_revision_before
+          << " renderRevisionAfter=" << render_revision_
+          << " cursorRow=" << snapshot_.cursor_row << " cursorColumn=" << snapshot_.cursor_column;
+    vibe::base::DebugTrace("core.terminal", "append.state", trace.str());
   }
 
   [[nodiscard]] auto terminal_size() const -> TerminalSize { return terminal_size_; }
@@ -588,6 +654,12 @@ class TerminalMultiplexer::Impl {
 
   static auto OnScrollbackClear(void* user) -> int {
     auto* self = static_cast<Impl*>(user);
+    std::ostringstream trace;
+    trace << "scrollbackBefore=" << self->scrollback_lines_.size()
+          << " renderRevision=" << self->render_revision_
+          << " terminalRows=" << self->terminal_size_.rows
+          << " terminalCols=" << self->terminal_size_.columns;
+    vibe::base::DebugTrace("core.terminal", "scrollback.clear", trace.str());
     self->scrollback_lines_.clear();
     self->dirty_ = true;
     return 1;
