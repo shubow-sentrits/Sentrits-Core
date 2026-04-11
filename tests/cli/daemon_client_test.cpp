@@ -73,6 +73,21 @@ TEST(DaemonClientTest, ParsesSessionListWithAdditiveNodeSummaryFields) {
   EXPECT_EQ(sessions[0].semantic_preview, "Workspace dirty");
 }
 
+TEST(DaemonClientTest, ParsesSetupList) {
+  const auto setups = ParseSetupList(
+      R"([{"setupId":"setup_1","name":"Prompt Setup","provider":"codex","workspaceRoot":".","title":"prompt","conversationId":"conv-1","groupTags":["frontend"],"commandShell":"codex \"$(cat prompt.md)\""},{"setupId":"setup_2","name":"Shell","provider":"claude","workspaceRoot":"/tmp","title":"ops","commandArgv":["/bin/bash","-l"]}])");
+
+  ASSERT_EQ(setups.size(), 2U);
+  EXPECT_EQ(setups[0].setup_id, "setup_1");
+  EXPECT_EQ(setups[0].name, "Prompt Setup");
+  ASSERT_TRUE(setups[0].conversation_id.has_value());
+  EXPECT_EQ(*setups[0].conversation_id, "conv-1");
+  ASSERT_TRUE(setups[0].command_shell.has_value());
+  EXPECT_EQ(*setups[0].command_shell, "codex \"$(cat prompt.md)\"");
+  ASSERT_TRUE(setups[1].command_argv.has_value());
+  EXPECT_EQ(*setups[1].command_argv, (std::vector<std::string>{"/bin/bash", "-l"}));
+}
+
 TEST(DaemonClientTest, BuildsControlAndTerminalCommands) {
   const std::string control = BuildControlRequestCommand(vibe::session::ControllerKind::Host);
   EXPECT_NE(control.find("\"type\":\"session.control.request\""), std::string::npos);

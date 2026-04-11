@@ -25,6 +25,18 @@ struct ListedSession {
   std::string semantic_preview;
 };
 
+struct ListedSetup {
+  std::string setup_id;
+  std::string name;
+  std::string provider;
+  std::string workspace_root;
+  std::string title;
+  std::optional<std::string> conversation_id;
+  std::vector<std::string> group_tags;
+  std::optional<std::vector<std::string>> command_argv;
+  std::optional<std::string> command_shell;
+};
+
 struct CreateSessionRequest {
   std::optional<vibe::session::ProviderType> provider;
   std::optional<std::string> workspace_root;
@@ -37,6 +49,7 @@ struct CreateSessionRequest {
 [[nodiscard]] auto BuildCreateSessionRequestBody(const CreateSessionRequest& request) -> std::string;
 [[nodiscard]] auto ParseCreatedSessionId(const std::string& body) -> std::optional<std::string>;
 [[nodiscard]] auto ParseSessionList(const std::string& body) -> std::vector<ListedSession>;
+[[nodiscard]] auto ParseSetupList(const std::string& body) -> std::vector<ListedSetup>;
 [[nodiscard]] auto BuildControlRequestCommand(vibe::session::ControllerKind controller_kind)
     -> std::string;
 [[nodiscard]] auto BuildReleaseControlCommand() -> std::string;
@@ -51,6 +64,7 @@ struct CreateSessionRequest {
 [[nodiscard]] auto StopSession(const DaemonEndpoint& endpoint, const std::string& session_id) -> std::optional<std::string>;
 [[nodiscard]] auto ClearInactiveSessions(const DaemonEndpoint& endpoint) -> std::optional<std::string>;
 [[nodiscard]] auto GetHostInfo(const DaemonEndpoint& endpoint) -> std::optional<std::string>;
+[[nodiscard]] auto ListSetups(const DaemonEndpoint& endpoint) -> std::optional<std::vector<ListedSetup>>;
 [[nodiscard]] auto AttachSession(const DaemonEndpoint& endpoint, const std::string& session_id,
                                  vibe::session::ControllerKind controller_kind) -> int;
 [[nodiscard]] auto ObserveSession(const DaemonEndpoint& endpoint, const std::string& session_id) -> int;

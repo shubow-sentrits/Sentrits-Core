@@ -583,6 +583,78 @@ auto ParseSessionList(const std::string& body) -> std::vector<ListedSession> {
   return sessions;
 }
 
+auto ParseSetupList(const std::string& body) -> std::vector<ListedSetup> {
+  boost::system::error_code error_code;
+  const json::value parsed = json::parse(body, error_code);
+  if (error_code || !parsed.is_array()) {
+    return {};
+  }
+
+  std::vector<ListedSetup> setups;
+  for (const auto& value : parsed.as_array()) {
+    if (!value.is_object()) {
+      continue;
+    }
+    const auto& object = value.as_object();
+    const auto setup_id = object.if_contains("setupId");
+    const auto name = object.if_contains("name");
+    const auto provider = object.if_contains("provider");
+    const auto workspace_root = object.if_contains("workspaceRoot");
+    const auto title = object.if_contains("title");
+    if (setup_id == nullptr || name == nullptr || provider == nullptr ||
+        workspace_root == nullptr || title == nullptr ||
+        !setup_id->is_string() || !name->is_string() || !provider->is_string() ||
+        !workspace_root->is_string() || !title->is_string()) {
+      continue;
+    }
+
+    ListedSetup setup{
+        .setup_id = json::value_to<std::string>(*setup_id),
+        .name = json::value_to<std::string>(*name),
+        .provider = json::value_to<std::string>(*provider),
+        .workspace_root = json::value_to<std::string>(*workspace_root),
+        .title = json::value_to<std::string>(*title),
+        .conversation_id = std::nullopt,
+        .group_tags = {},
+        .command_argv = std::nullopt,
+        .command_shell = std::nullopt,
+    };
+    if (const auto conversation_id = object.if_contains("conversationId");
+        conversation_id != nullptr && conversation_id->is_string()) {
+      setup.conversation_id = json::value_to<std::string>(*conversation_id);
+    }
+    if (const auto group_tags = object.if_contains("groupTags");
+        group_tags != nullptr && group_tags->is_array()) {
+      for (const auto& tag : group_tags->as_array()) {
+        if (tag.is_string()) {
+          setup.group_tags.push_back(json::value_to<std::string>(tag));
+        }
+      }
+    }
+    if (const auto command_argv = object.if_contains("commandArgv");
+        command_argv != nullptr && command_argv->is_array()) {
+      std::vector<std::string> tokens;
+      for (const auto& token : command_argv->as_array()) {
+        if (!token.is_string()) {
+          tokens.clear();
+          break;
+        }
+        tokens.push_back(json::value_to<std::string>(token));
+      }
+      if (!tokens.empty()) {
+        setup.command_argv = std::move(tokens);
+      }
+    }
+    if (const auto command_shell = object.if_contains("commandShell");
+        command_shell != nullptr && command_shell->is_string()) {
+      setup.command_shell = json::value_to<std::string>(*command_shell);
+    }
+    setups.push_back(std::move(setup));
+  }
+
+  return setups;
+}
+
 auto BuildControlRequestCommand(const vibe::session::ControllerKind controller_kind) -> std::string {
   json::object object;
   object["type"] = "session.control.request";
@@ -673,6 +745,14 @@ auto GetHostInfo(const DaemonEndpoint& endpoint) -> std::optional<std::string> {
     return std::nullopt;
   }
   return response->body();
+}
+
+auto ListSetups(const DaemonEndpoint& endpoint) -> std::optional<std::vector<ListedSetup>> {
+  const auto response = PerformHttpRequest(endpoint, http::verb::get, "/host/setups");
+  if (!response.has_value() || response->result() != http::status::ok) {
+    return std::nullopt;
+  }
+  return ParseSetupList(response->body());
 }
 
 auto AttachSessionLocal(const std::string& session_id) -> int {

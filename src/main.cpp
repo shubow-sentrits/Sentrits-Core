@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -537,6 +538,8 @@ void PrintUsage() {
             << "  sentrits session start [--host HOST] [--port PORT] [--title TITLE]"
                " [--workspace PATH] [--provider codex|claude] [--setup SETUP_ID]"
                " [--shell-command COMMAND] [--attach]\n"
+            << "  sentrits setup list [--host HOST] [--port PORT] [--json]\n"
+            << "  sentrits setup show [--host HOST] [--port PORT] [--json] <setup-id>\n"
             << "  sentrits session attach [--host HOST] [--port PORT] <session-id>\n"
             << "  sentrits session observe [--host HOST] [--port PORT] <session-id>\n"
             << "  sentrits session stop [--host HOST] [--port PORT] [--json] <session-id>\n"
@@ -585,6 +588,36 @@ auto JsonUInt16(const json::object& object, const std::string_view key) -> std::
   return std::nullopt;
 }
 
+auto SetupToJsonValue(const vibe::cli::ListedSetup& setup) -> json::value {
+  json::object object;
+  object["setupId"] = setup.setup_id;
+  object["name"] = setup.name;
+  object["provider"] = setup.provider;
+  object["workspaceRoot"] = setup.workspace_root;
+  object["title"] = setup.title;
+  if (setup.conversation_id.has_value()) {
+    object["conversationId"] = *setup.conversation_id;
+  }
+  if (!setup.group_tags.empty()) {
+    json::array group_tags;
+    for (const auto& tag : setup.group_tags) {
+      group_tags.emplace_back(tag);
+    }
+    object["groupTags"] = std::move(group_tags);
+  }
+  if (setup.command_argv.has_value()) {
+    json::array command_argv;
+    for (const auto& token : *setup.command_argv) {
+      command_argv.emplace_back(token);
+    }
+    object["commandArgv"] = std::move(command_argv);
+  }
+  if (setup.command_shell.has_value()) {
+    object["commandShell"] = *setup.command_shell;
+  }
+  return object;
+}
+
 void PrintSessionListHuman(const std::vector<vibe::cli::ListedSession>& sessions) {
   for (const auto& session : sessions) {
     std::cout << session.session_id << '\t'
@@ -598,6 +631,60 @@ void PrintSessionListHuman(const std::vector<vibe::cli::ListedSession>& sessions
     }
     std::cout
               << '\n';
+  }
+}
+
+auto SetupLaunchMode(const vibe::cli::ListedSetup& setup) -> std::string {
+  if (setup.command_shell.has_value()) {
+    return "shell";
+  }
+  if (setup.command_argv.has_value() && !setup.command_argv->empty()) {
+    return "argv";
+  }
+  return "provider_default";
+}
+
+void PrintSetupListHuman(const std::vector<vibe::cli::ListedSetup>& setups) {
+  for (const auto& setup : setups) {
+    std::cout << setup.setup_id << '\t'
+              << (setup.name.empty() ? "(unnamed)" : setup.name) << '\t'
+              << SetupLaunchMode(setup) << '\t'
+              << setup.provider << '\t'
+              << setup.workspace_root << '\n';
+  }
+}
+
+void PrintSetupHuman(const vibe::cli::ListedSetup& setup) {
+  std::cout << "Setup ID:       " << setup.setup_id << '\n'
+            << "Name:           " << setup.name << '\n'
+            << "Provider:       " << setup.provider << '\n'
+            << "Workspace:      " << setup.workspace_root << '\n'
+            << "Title:          " << setup.title << '\n'
+            << "Launch Mode:    " << SetupLaunchMode(setup) << '\n';
+  if (setup.conversation_id.has_value()) {
+    std::cout << "Conversation:   " << *setup.conversation_id << '\n';
+  }
+  if (!setup.group_tags.empty()) {
+    std::cout << "Group Tags:     ";
+    for (std::size_t index = 0; index < setup.group_tags.size(); ++index) {
+      if (index != 0U) {
+        std::cout << ", ";
+      }
+      std::cout << setup.group_tags[index];
+    }
+    std::cout << '\n';
+  }
+  if (setup.command_shell.has_value()) {
+    std::cout << "Command Shell:  " << *setup.command_shell << '\n';
+  } else if (setup.command_argv.has_value() && !setup.command_argv->empty()) {
+    std::cout << "Command Argv:   ";
+    for (std::size_t index = 0; index < setup.command_argv->size(); ++index) {
+      if (index != 0U) {
+        std::cout << ' ';
+      }
+      std::cout << (*setup.command_argv)[index];
+    }
+    std::cout << '\n';
   }
 }
 
@@ -1100,6 +1187,60 @@ auto main(const int argc, char** argv) -> int {
         std::cout << PrettyPrintJson(*result) << '\n';
       } else {
         std::cout << "cleared inactive sessions\n";
+      }
+      return 0;
+    }
+  }
+
+  if (command == "setup" && argc >= 3) {
+    const std::string subcommand = argv[2];
+    if (subcommand == "list") {
+      const auto options = ParseCommandOptions(argc, argv, 3, LoadConfiguredAdminEndpoint());
+      if (!options.has_value()) {
+        PrintUsage();
+        return 1;
+      }
+      const auto setups = vibe::cli::ListSetups(options->endpoint);
+      if (!setups.has_value()) {
+        std::cerr << "failed to list setups via daemon at " << options->endpoint.host << ":"
+                  << options->endpoint.port << '\n';
+        return 1;
+      }
+      if (options->json_output) {
+        json::array array;
+        for (const auto& setup : *setups) {
+          array.emplace_back(SetupToJsonValue(setup));
+        }
+        std::cout << json::serialize(array) << '\n';
+      } else {
+        PrintSetupListHuman(*setups);
+      }
+      return 0;
+    }
+
+    if (subcommand == "show") {
+      const auto options = ParseCommandOptions(argc, argv, 3, LoadConfiguredAdminEndpoint());
+      if (!options.has_value() || options->positionals.empty()) {
+        PrintUsage();
+        return 1;
+      }
+      const auto setups = vibe::cli::ListSetups(options->endpoint);
+      if (!setups.has_value()) {
+        std::cerr << "failed to list setups via daemon at " << options->endpoint.host << ":"
+                  << options->endpoint.port << '\n';
+        return 1;
+      }
+      const auto it = std::find_if(setups->begin(), setups->end(), [&](const vibe::cli::ListedSetup& setup) {
+        return setup.setup_id == options->positionals.front();
+      });
+      if (it == setups->end()) {
+        std::cerr << "setup " << options->positionals.front() << " not found\n";
+        return 1;
+      }
+      if (options->json_output) {
+        std::cout << json::serialize(SetupToJsonValue(*it)) << '\n';
+      } else {
+        PrintSetupHuman(*it);
       }
       return 0;
     }
