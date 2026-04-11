@@ -211,6 +211,7 @@ Acceptance criteria:
 
 ## Immediate Next Docs to Consult
 
+- [provider_session_setup_and_host_identity_alignment.md](provider_session_setup_and_host_identity_alignment.md)
 - [architecture_refined.md](architecture_refined.md)
 - [session_attention_inference_v1.md](session_attention_inference_v1.md)
 - [session_runtime_and_pty.md](session_runtime_and_pty.md)
