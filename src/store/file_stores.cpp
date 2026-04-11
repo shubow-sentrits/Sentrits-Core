@@ -350,6 +350,122 @@ auto ParseProviderCommandOverride(const json::value* value)
   return result;
 }
 
+auto ParseSessionSetupRecord(const json::value& value)
+    -> std::optional<vibe::store::SessionSetupRecord> {
+  if (!value.is_object()) {
+    return std::nullopt;
+  }
+
+  const json::object& object = value.as_object();
+  const auto* setup_id = object.if_contains("setupId");
+  const auto* name = object.if_contains("name");
+  const auto* provider = object.if_contains("provider");
+  const auto* workspace_root = object.if_contains("workspaceRoot");
+  const auto* title = object.if_contains("title");
+  const auto* conversation_id = object.if_contains("conversationId");
+  const auto* group_tags = object.if_contains("groupTags");
+  const auto* command_argv = object.if_contains("commandArgv");
+  const auto* command_shell = object.if_contains("commandShell");
+
+  if (setup_id == nullptr || name == nullptr || provider == nullptr || workspace_root == nullptr ||
+      title == nullptr || !setup_id->is_string() || !name->is_string() || !provider->is_string() ||
+      !workspace_root->is_string() || !title->is_string()) {
+    return std::nullopt;
+  }
+  if (conversation_id != nullptr && !conversation_id->is_string()) {
+    return std::nullopt;
+  }
+
+  const auto parsed_provider = ParseProviderType(std::string(provider->as_string()));
+  if (!parsed_provider.has_value()) {
+    return std::nullopt;
+  }
+
+  vibe::store::SessionSetupRecord record{
+      .setup_id = std::string(setup_id->as_string()),
+      .name = std::string(name->as_string()),
+      .provider = *parsed_provider,
+      .workspace_root = std::string(workspace_root->as_string()),
+      .title = std::string(title->as_string()),
+      .conversation_id = conversation_id != nullptr
+                             ? std::make_optional(std::string(conversation_id->as_string()))
+                             : std::nullopt,
+      .group_tags = {},
+      .command_argv = std::nullopt,
+      .command_shell = std::nullopt,
+  };
+  if (record.setup_id.empty() || record.name.empty() || record.workspace_root.empty() ||
+      record.title.empty()) {
+    return std::nullopt;
+  }
+
+  if (group_tags != nullptr) {
+    if (!group_tags->is_array()) {
+      return std::nullopt;
+    }
+    std::vector<std::string> parsed_group_tags;
+    parsed_group_tags.reserve(group_tags->as_array().size());
+    for (const auto& item : group_tags->as_array()) {
+      if (!item.is_string()) {
+        return std::nullopt;
+      }
+      parsed_group_tags.push_back(std::string(item.as_string()));
+    }
+    record.group_tags = vibe::session::NormalizeGroupTags(parsed_group_tags);
+  }
+
+  const auto parsed_command_argv = ParseProviderCommandOverride(command_argv);
+  if (!parsed_command_argv.has_value()) {
+    return std::nullopt;
+  }
+  if (!parsed_command_argv->executable.empty()) {
+    record.command_argv = std::vector<std::string>{parsed_command_argv->executable};
+    record.command_argv->insert(record.command_argv->end(), parsed_command_argv->args.begin(),
+                                parsed_command_argv->args.end());
+  }
+
+  if (command_shell != nullptr) {
+    if (!command_shell->is_string()) {
+      return std::nullopt;
+    }
+    const std::string shell = std::string(command_shell->as_string());
+    if (shell.empty()) {
+      return std::nullopt;
+    }
+    record.command_shell = shell;
+  }
+
+  if (record.command_argv.has_value() && record.command_shell.has_value()) {
+    return std::nullopt;
+  }
+
+  return record;
+}
+
+auto ToJsonValue(const vibe::store::SessionSetupRecord& record) -> json::value {
+  json::object object;
+  object["setupId"] = record.setup_id;
+  object["name"] = record.name;
+  object["provider"] = std::string(vibe::session::ToString(record.provider));
+  object["workspaceRoot"] = record.workspace_root;
+  object["title"] = record.title;
+  if (record.conversation_id.has_value()) {
+    object["conversationId"] = *record.conversation_id;
+  }
+  object["groupTags"] = json::value_from(record.group_tags);
+  if (record.command_argv.has_value()) {
+    json::array argv;
+    for (const auto& token : *record.command_argv) {
+      argv.emplace_back(token);
+    }
+    object["commandArgv"] = std::move(argv);
+  }
+  if (record.command_shell.has_value()) {
+    object["commandShell"] = *record.command_shell;
+  }
+  return object;
+}
+
 auto HostIdentityFromJsonWithDefaults(const json::value& value) -> std::optional<HostIdentity> {
   auto parsed_identity = HostIdentityFromJson(value);
   if (!parsed_identity.has_value()) {
@@ -416,6 +532,21 @@ auto HostIdentityFromJsonWithDefaults(const json::value& value) -> std::optional
     identity.claude_command = std::move(*claude_command);
   }
 
+  if (const auto* parsed_session_setups = object.if_contains("sessionSetups");
+      parsed_session_setups != nullptr) {
+    if (!parsed_session_setups->is_array()) {
+      return std::nullopt;
+    }
+    identity.session_setups.clear();
+    for (const auto& item : parsed_session_setups->as_array()) {
+      auto parsed = ParseSessionSetupRecord(item);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      identity.session_setups.push_back(std::move(*parsed));
+    }
+  }
+
   return identity;
 }
 
@@ -443,6 +574,11 @@ auto ToJsonValue(const HostIdentity& identity) -> json::value {
   provider_commands["codex"] = to_command_json(identity.codex_command);
   provider_commands["claude"] = to_command_json(identity.claude_command);
   object["providerCommands"] = std::move(provider_commands);
+  json::array session_setups;
+  for (const auto& setup : identity.session_setups) {
+    session_setups.emplace_back(ToJsonValue(setup));
+  }
+  object["sessionSetups"] = std::move(session_setups);
   return object;
 }
 

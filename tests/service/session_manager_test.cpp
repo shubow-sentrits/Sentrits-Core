@@ -251,6 +251,23 @@ TEST(SessionManagerTest, CreateSessionNormalizesAndPersistsGroupTags) {
   EXPECT_EQ(persisted->group_tags, (std::vector<std::string>{"frontend", "mvp"}));
 }
 
+TEST(SessionManagerTest, CreateSessionSupportsShellCommandLaunchOverride) {
+  FakeSessionStore session_store;
+  SessionManager manager(&session_store);
+
+  const auto created = manager.CreateSession(CreateSessionRequest{
+      .provider = vibe::session::ProviderType::Codex,
+      .workspace_root = ".",
+      .title = "shell-command",
+      .conversation_id = std::nullopt,
+      .command_argv = std::nullopt,
+      .command_shell = std::string("printf 'shell-ready\\n'; sleep 30"),
+      .group_tags = {},
+  });
+  ASSERT_TRUE(created.has_value());
+  EXPECT_EQ(created->title, "shell-command");
+}
+
 TEST(SessionManagerTest, UpdatesGroupTagsForLiveAndRecoveredSessions) {
   FakeSessionStore session_store;
   session_store.sessions.push_back(vibe::store::PersistedSessionRecord{

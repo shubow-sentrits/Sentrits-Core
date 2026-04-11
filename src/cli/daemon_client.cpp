@@ -496,13 +496,30 @@ auto HandleServerMessage(const std::string& payload,
 
 }  // namespace
 
-auto BuildCreateSessionRequestBody(const vibe::session::ProviderType provider,
-                                   const std::string& workspace_root,
-                                   const std::string& title) -> std::string {
+auto BuildCreateSessionRequestBody(const CreateSessionRequest& request) -> std::string {
   json::object object;
-  object["provider"] = std::string(vibe::session::ToString(provider));
-  object["workspaceRoot"] = workspace_root;
-  object["title"] = title;
+  if (request.provider.has_value()) {
+    object["provider"] = std::string(vibe::session::ToString(*request.provider));
+  }
+  if (request.workspace_root.has_value()) {
+    object["workspaceRoot"] = *request.workspace_root;
+  }
+  if (request.title.has_value()) {
+    object["title"] = *request.title;
+  }
+  if (request.setup_id.has_value()) {
+    object["setupId"] = *request.setup_id;
+  }
+  if (request.command_argv.has_value()) {
+    json::array command;
+    for (const auto& token : *request.command_argv) {
+      command.push_back(json::value(token));
+    }
+    object["commandArgv"] = std::move(command);
+  }
+  if (request.command_shell.has_value()) {
+    object["commandShell"] = *request.command_shell;
+  }
   return json::serialize(object);
 }
 
@@ -594,12 +611,11 @@ auto BuildResizeCommand(const vibe::session::TerminalSize terminal_size) -> std:
   return json::serialize(object);
 }
 
-auto CreateSession(const DaemonEndpoint& endpoint, const vibe::session::ProviderType provider,
-                   const std::string& workspace_root, const std::string& title)
+auto CreateSession(const DaemonEndpoint& endpoint, const CreateSessionRequest& request)
     -> std::optional<std::string> {
   const auto response = PerformHttpRequest(
-      endpoint, http::verb::post, "/sessions",
-      BuildCreateSessionRequestBody(provider, workspace_root, title), "application/json");
+      endpoint, http::verb::post, "/sessions", BuildCreateSessionRequestBody(request),
+      "application/json");
   if (!response.has_value()) {
     return std::nullopt;
   }

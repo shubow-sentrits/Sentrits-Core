@@ -26,6 +26,7 @@ struct CreateSessionRequest {
   std::string title;
   std::optional<std::string> conversation_id;
   std::optional<std::vector<std::string>> command_argv;
+  std::optional<std::string> command_shell;
   std::vector<std::string> group_tags;
 };
 

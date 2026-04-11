@@ -25,9 +25,16 @@ struct ListedSession {
   std::string semantic_preview;
 };
 
-[[nodiscard]] auto BuildCreateSessionRequestBody(vibe::session::ProviderType provider,
-                                                 const std::string& workspace_root,
-                                                 const std::string& title) -> std::string;
+struct CreateSessionRequest {
+  std::optional<vibe::session::ProviderType> provider;
+  std::optional<std::string> workspace_root;
+  std::optional<std::string> title;
+  std::optional<std::string> setup_id;
+  std::optional<std::vector<std::string>> command_argv;
+  std::optional<std::string> command_shell;
+};
+
+[[nodiscard]] auto BuildCreateSessionRequestBody(const CreateSessionRequest& request) -> std::string;
 [[nodiscard]] auto ParseCreatedSessionId(const std::string& body) -> std::optional<std::string>;
 [[nodiscard]] auto ParseSessionList(const std::string& body) -> std::vector<ListedSession>;
 [[nodiscard]] auto BuildControlRequestCommand(vibe::session::ControllerKind controller_kind)
@@ -36,10 +43,8 @@ struct ListedSession {
 [[nodiscard]] auto BuildInputCommand(const std::string& data) -> std::string;
 [[nodiscard]] auto BuildResizeCommand(vibe::session::TerminalSize terminal_size) -> std::string;
 
-[[nodiscard]] auto CreateSession(const DaemonEndpoint& endpoint,
-                                 vibe::session::ProviderType provider,
-                                 const std::string& workspace_root,
-                                 const std::string& title) -> std::optional<std::string>;
+[[nodiscard]] auto CreateSession(const DaemonEndpoint& endpoint, const CreateSessionRequest& request)
+    -> std::optional<std::string>;
 [[nodiscard]] auto ListSessions(const DaemonEndpoint& endpoint) -> std::optional<std::vector<ListedSession>>;
 [[nodiscard]] auto GetSessionSnapshot(const DaemonEndpoint& endpoint, const std::string& session_id)
     -> std::optional<std::string>;

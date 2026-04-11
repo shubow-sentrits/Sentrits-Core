@@ -534,7 +534,9 @@ void PrintUsage() {
             << "  sentrits local-pty [command [args...]]\n"
             << "  sentrits session list [--host HOST] [--port PORT] [--json]\n"
             << "  sentrits session show [--host HOST] [--port PORT] [--json] <session-id>\n"
-            << "  sentrits session start [--host HOST] [--port PORT] [--title TITLE] [--attach]\n"
+            << "  sentrits session start [--host HOST] [--port PORT] [--title TITLE]"
+               " [--workspace PATH] [--provider codex|claude] [--setup SETUP_ID]"
+               " [--shell-command COMMAND] [--attach]\n"
             << "  sentrits session attach [--host HOST] [--port PORT] <session-id>\n"
             << "  sentrits session observe [--host HOST] [--port PORT] <session-id>\n"
             << "  sentrits session stop [--host HOST] [--port PORT] [--json] <session-id>\n"
@@ -666,8 +668,22 @@ struct ParsedCommandOptions {
   bool json_output{false};
   bool attach_after_create{false};
   std::optional<std::string> title;
+  std::optional<std::string> workspace_root;
+  std::optional<std::string> setup_id;
+  std::optional<std::string> shell_command;
+  std::optional<vibe::session::ProviderType> provider;
   std::vector<std::string> positionals;
 };
+
+auto ParseProviderOption(const std::string& value) -> std::optional<vibe::session::ProviderType> {
+  if (value == "codex") {
+    return vibe::session::ProviderType::Codex;
+  }
+  if (value == "claude") {
+    return vibe::session::ProviderType::Claude;
+  }
+  return std::nullopt;
+}
 
 auto ParseCommandOptions(const int argc, char** argv, int start_index,
                          vibe::cli::DaemonEndpoint default_endpoint) -> std::optional<ParsedCommandOptions> {
@@ -698,6 +714,30 @@ auto ParseCommandOptions(const int argc, char** argv, int start_index,
     }
     if (argument == "--title" && index + 1 < argc) {
       options.title = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--workspace" && index + 1 < argc) {
+      options.workspace_root = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--setup" && index + 1 < argc) {
+      options.setup_id = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--shell-command" && index + 1 < argc) {
+      options.shell_command = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--provider" && index + 1 < argc) {
+      const auto provider = ParseProviderOption(argv[index + 1]);
+      if (!provider.has_value()) {
+        return std::nullopt;
+      }
+      options.provider = *provider;
       index += 2;
       continue;
     }
@@ -887,10 +927,17 @@ auto main(const int argc, char** argv) -> int {
   if (command == "session-start") {
     if (auto options = ParseCommandOptions(argc, argv, 2, LoadConfiguredAdminEndpoint());
         options.has_value()) {
-      const std::string title =
-          options->title.value_or(!options->positionals.empty() ? options->positionals.front() : "host-session");
+      const std::string title = options->title.value_or("host-session");
       const auto session_id = vibe::cli::CreateSession(
-          options->endpoint, vibe::session::ProviderType::Codex, std::filesystem::current_path().string(), title);
+          options->endpoint,
+          vibe::cli::CreateSessionRequest{
+              .provider = options->provider,
+              .workspace_root = options->workspace_root.value_or(std::filesystem::current_path().string()),
+              .title = title,
+              .setup_id = options->setup_id,
+              .command_argv = std::nullopt,
+              .command_shell = options->shell_command,
+          });
       if (!session_id.has_value()) {
         std::cerr << "failed to create session via daemon at " << options->endpoint.host << ":"
                   << options->endpoint.port << '\n';
@@ -968,10 +1015,17 @@ auto main(const int argc, char** argv) -> int {
         PrintUsage();
         return 1;
       }
-      const std::string title =
-          options->title.value_or(!options->positionals.empty() ? options->positionals.front() : "session");
+      const std::string title = options->title.value_or("session");
       const auto session_id = vibe::cli::CreateSession(
-          options->endpoint, vibe::session::ProviderType::Codex, std::filesystem::current_path().string(), title);
+          options->endpoint,
+          vibe::cli::CreateSessionRequest{
+              .provider = options->provider,
+              .workspace_root = options->workspace_root.value_or(std::filesystem::current_path().string()),
+              .title = title,
+              .setup_id = options->setup_id,
+              .command_argv = std::nullopt,
+              .command_shell = options->shell_command,
+          });
       if (!session_id.has_value()) {
         std::cerr << "failed to create session via daemon at " << options->endpoint.host << ":"
                   << options->endpoint.port << '\n';

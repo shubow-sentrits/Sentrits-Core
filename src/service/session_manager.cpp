@@ -579,7 +579,14 @@ auto SessionManager::CreateSession(const CreateSessionRequest& request)
   const vibe::session::ProviderConfig provider_config =
       vibe::session::DefaultProviderConfig(request.provider);
   vibe::session::ProviderConfig launch_provider_config = provider_config;
-  if (request.command_argv.has_value()) {
+  if (request.command_shell.has_value()) {
+    if (request.command_shell->empty()) {
+      return std::nullopt;
+    }
+
+    launch_provider_config.executable = "/bin/sh";
+    launch_provider_config.default_args = {"-lc", *request.command_shell};
+  } else if (request.command_argv.has_value()) {
     if (request.command_argv->empty() || request.command_argv->front().empty()) {
       return std::nullopt;
     }

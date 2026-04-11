@@ -507,6 +507,38 @@ auto ToJson(const DiscoveryInfo& info) -> std::string {
   return json::serialize(object);
 }
 
+auto ToJson(const vibe::store::SessionSetupRecord& setup) -> std::string {
+  json::object object;
+  object["setupId"] = setup.setup_id;
+  object["name"] = setup.name;
+  object["provider"] = std::string(vibe::session::ToString(setup.provider));
+  object["workspaceRoot"] = setup.workspace_root;
+  object["title"] = setup.title;
+  if (setup.conversation_id.has_value()) {
+    object["conversationId"] = *setup.conversation_id;
+  }
+  object["groupTags"] = json::value_from(setup.group_tags);
+  if (setup.command_argv.has_value()) {
+    json::array argv;
+    for (const auto& token : *setup.command_argv) {
+      argv.emplace_back(token);
+    }
+    object["commandArgv"] = std::move(argv);
+  }
+  if (setup.command_shell.has_value()) {
+    object["commandShell"] = *setup.command_shell;
+  }
+  return json::serialize(object);
+}
+
+auto ToJson(const std::vector<vibe::store::SessionSetupRecord>& setups) -> std::string {
+  json::array array;
+  for (const auto& setup : setups) {
+    array.emplace_back(json::parse(ToJson(setup)));
+  }
+  return json::serialize(array);
+}
+
 auto ToJsonHostInfo() -> std::string {
   return ToJsonHostInfo(std::nullopt, false);
 }
@@ -537,8 +569,9 @@ auto ToJsonHostInfo(const std::optional<vibe::store::HostIdentity>& host_identit
   append_command("codex", resolved_identity.codex_command);
   append_command("claude", resolved_identity.claude_command);
   object["providerCommands"] = std::move(provider_commands);
+  object["sessionSetupCount"] = resolved_identity.session_setups.size();
   object["version"] = "0.1.0";
-  object["capabilities"] = {"sessions", "rest", "websocket"};
+  object["capabilities"] = {"sessions", "rest", "websocket", "sessionSetups"};
   object["pairingMode"] = "approval";
   json::object tls;
   tls["enabled"] = tls_enabled;

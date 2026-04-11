@@ -1,6 +1,6 @@
 # Provider, Session Setup, and Host Identity Alignment
 
-This document is a code-truth implementation plan for aligning session creation inputs and host identity management across the Sentrits runtime, web client, and iOS client.
+This document is a code-truth implementation plan for aligning session creation inputs and host identity management across the Sentrits runtime, web client, and iOS client. If there's conflict with this doc and code, use code as ground truth.
 
 Scope:
 

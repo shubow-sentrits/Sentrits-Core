@@ -37,10 +37,70 @@ auto ParseNormalizedTagsArray(const json::value* value) -> std::optional<std::ve
   return vibe::session::NormalizeGroupTags(tags);
 }
 
+auto ParseProviderValue(const json::value* value) -> std::optional<vibe::session::ProviderType> {
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  if (!value->is_string()) {
+    return std::nullopt;
+  }
+
+  const std::string provider_name = json::value_to<std::string>(*value);
+  if (provider_name == "codex") {
+    return vibe::session::ProviderType::Codex;
+  }
+  if (provider_name == "claude") {
+    return vibe::session::ProviderType::Claude;
+  }
+  return std::nullopt;
+}
+
+auto ParseCommandArgvValue(const json::value* value) -> std::optional<std::optional<std::vector<std::string>>> {
+  if (value == nullptr) {
+    return std::optional<std::vector<std::string>>{};
+  }
+  if (!value->is_array()) {
+    return std::nullopt;
+  }
+
+  std::vector<std::string> parsed_command;
+  for (const auto& item : value->as_array()) {
+    if (!item.is_string()) {
+      return std::nullopt;
+    }
+    const std::string argument = json::value_to<std::string>(item);
+    if (argument.empty()) {
+      return std::nullopt;
+    }
+    parsed_command.push_back(argument);
+  }
+
+  if (parsed_command.empty()) {
+    return std::nullopt;
+  }
+  return std::optional<std::vector<std::string>>{std::move(parsed_command)};
+}
+
+auto ParseOptionalNonEmptyString(const json::value* value)
+    -> std::optional<std::optional<std::string>> {
+  if (value == nullptr) {
+    return std::optional<std::string>{};
+  }
+  if (!value->is_string()) {
+    return std::nullopt;
+  }
+
+  const std::string parsed = json::value_to<std::string>(*value);
+  if (parsed.empty()) {
+    return std::nullopt;
+  }
+  return std::optional<std::string>{parsed};
+}
+
 }  // namespace
 
 auto ParseCreateSessionRequest(const std::string& body)
-    -> std::optional<vibe::service::CreateSessionRequest> {
+    -> std::optional<CreateSessionRequestPayload> {
   boost::system::error_code error_code;
   const json::value parsed = json::parse(body, error_code);
   if (error_code || !parsed.is_object()) {
@@ -53,55 +113,65 @@ auto ParseCreateSessionRequest(const std::string& body)
   const auto title = object.if_contains("title");
   const auto conversation_id = object.if_contains("conversationId");
   const auto command = object.if_contains("command");
+  const auto command_argv = object.if_contains("commandArgv");
+  const auto command_shell = object.if_contains("commandShell");
   const auto group_tags = object.if_contains("groupTags");
+  const auto setup_id = object.if_contains("setupId");
 
-  if (provider_value == nullptr || workspace_root == nullptr || title == nullptr ||
-      !provider_value->is_string() || !workspace_root->is_string() || !title->is_string()) {
+  std::optional<vibe::session::ProviderType> provider = std::nullopt;
+  if (provider_value != nullptr) {
+    provider = ParseProviderValue(provider_value);
+    if (!provider.has_value()) {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<std::string> parsed_workspace_root = std::nullopt;
+  if (workspace_root != nullptr) {
+    if (!workspace_root->is_string()) {
+      return std::nullopt;
+    }
+    parsed_workspace_root = json::value_to<std::string>(*workspace_root);
+    if (parsed_workspace_root->empty()) {
+      return std::nullopt;
+    }
+  }
+
+  std::optional<std::string> parsed_title = std::nullopt;
+  if (title != nullptr) {
+    if (!title->is_string()) {
+      return std::nullopt;
+    }
+    parsed_title = json::value_to<std::string>(*title);
+    if (parsed_title->empty()) {
+      return std::nullopt;
+    }
+  }
+
+  const auto parsed_conversation_id = ParseOptionalNonEmptyString(conversation_id);
+  if (!parsed_conversation_id.has_value()) {
     return std::nullopt;
   }
 
-  const std::string provider_name = json::value_to<std::string>(*provider_value);
-  vibe::session::ProviderType provider = vibe::session::ProviderType::Codex;
-  if (provider_name == "claude") {
-    provider = vibe::session::ProviderType::Claude;
-  } else if (provider_name != "codex") {
+  const auto parsed_setup_id = ParseOptionalNonEmptyString(setup_id);
+  if (!parsed_setup_id.has_value()) {
     return std::nullopt;
   }
 
-  std::optional<std::vector<std::string>> command_argv = std::nullopt;
-  std::optional<std::string> parsed_conversation_id = std::nullopt;
-  if (conversation_id != nullptr) {
-    if (!conversation_id->is_string()) {
-      return std::nullopt;
-    }
-    const std::string value = json::value_to<std::string>(*conversation_id);
-    if (value.empty()) {
-      return std::nullopt;
-    }
-    parsed_conversation_id = std::move(value);
+  const auto parsed_command = ParseCommandArgvValue(command);
+  const auto parsed_command_argv = ParseCommandArgvValue(command_argv);
+  const auto parsed_command_shell = ParseOptionalNonEmptyString(command_shell);
+  if (!parsed_command.has_value() || !parsed_command_argv.has_value() ||
+      !parsed_command_shell.has_value()) {
+    return std::nullopt;
   }
 
-  if (command != nullptr) {
-    if (!command->is_array()) {
-      return std::nullopt;
-    }
-
-    std::vector<std::string> parsed_command;
-    for (const auto& item : command->as_array()) {
-      if (!item.is_string()) {
-        return std::nullopt;
-      }
-      const std::string argument = json::value_to<std::string>(item);
-      if (argument.empty()) {
-        return std::nullopt;
-      }
-      parsed_command.push_back(argument);
-    }
-
-    if (parsed_command.empty()) {
-      return std::nullopt;
-    }
-    command_argv = std::move(parsed_command);
+  if (parsed_command->has_value() && parsed_command_argv->has_value()) {
+    return std::nullopt;
+  }
+  if ((parsed_command->has_value() || parsed_command_argv->has_value()) &&
+      parsed_command_shell->has_value()) {
+    return std::nullopt;
   }
 
   const auto parsed_group_tags = ParseNormalizedTagsArray(group_tags);
@@ -109,13 +179,16 @@ auto ParseCreateSessionRequest(const std::string& body)
     return std::nullopt;
   }
 
-  return vibe::service::CreateSessionRequest{
+  return CreateSessionRequestPayload{
       .provider = provider,
-      .workspace_root = json::value_to<std::string>(*workspace_root),
-      .title = json::value_to<std::string>(*title),
-      .conversation_id = std::move(parsed_conversation_id),
-      .command_argv = std::move(command_argv),
-      .group_tags = std::move(*parsed_group_tags),
+      .workspace_root = std::move(parsed_workspace_root),
+      .title = std::move(parsed_title),
+      .conversation_id = std::move(*parsed_conversation_id),
+      .command_argv =
+          parsed_command_argv->has_value() ? std::move(*parsed_command_argv) : std::move(*parsed_command),
+      .command_shell = std::move(*parsed_command_shell),
+      .group_tags = std::move(parsed_group_tags),
+      .setup_id = std::move(*parsed_setup_id),
   };
 }
 
@@ -297,6 +370,82 @@ auto ParseHostConfigRequest(const std::string& body) -> std::optional<HostConfig
       .remote_port = *parsed_remote_port,
       .codex_command = std::move(codex_command),
       .claude_command = std::move(claude_command),
+  };
+}
+
+auto ParseHostSessionSetupRequest(const std::string& body)
+    -> std::optional<HostSessionSetupPayload> {
+  boost::system::error_code error_code;
+  const json::value parsed = json::parse(body, error_code);
+  if (error_code || !parsed.is_object()) {
+    return std::nullopt;
+  }
+
+  const json::object& object = parsed.as_object();
+  const auto name = object.if_contains("name");
+  const auto provider = object.if_contains("provider");
+  const auto workspace_root = object.if_contains("workspaceRoot");
+  const auto title = object.if_contains("title");
+  const auto setup_id = object.if_contains("setupId");
+  const auto conversation_id = object.if_contains("conversationId");
+  const auto command = object.if_contains("command");
+  const auto command_argv = object.if_contains("commandArgv");
+  const auto command_shell = object.if_contains("commandShell");
+  const auto group_tags = object.if_contains("groupTags");
+
+  if (name == nullptr || workspace_root == nullptr || title == nullptr ||
+      !name->is_string() || !workspace_root->is_string() || !title->is_string()) {
+    return std::nullopt;
+  }
+
+  const auto parsed_provider = provider != nullptr ? ParseProviderValue(provider)
+                                                   : std::optional<vibe::session::ProviderType>{
+                                                         vibe::session::ProviderType::Codex};
+  if (!parsed_provider.has_value()) {
+    return std::nullopt;
+  }
+
+  const auto parsed_setup_id = ParseOptionalNonEmptyString(setup_id);
+  const auto parsed_conversation_id = ParseOptionalNonEmptyString(conversation_id);
+  const auto parsed_command = ParseCommandArgvValue(command);
+  const auto parsed_command_argv = ParseCommandArgvValue(command_argv);
+  const auto parsed_command_shell = ParseOptionalNonEmptyString(command_shell);
+  if (!parsed_setup_id.has_value() || !parsed_conversation_id.has_value() ||
+      !parsed_command.has_value() || !parsed_command_argv.has_value() ||
+      !parsed_command_shell.has_value()) {
+    return std::nullopt;
+  }
+  if (parsed_command->has_value() && parsed_command_argv->has_value()) {
+    return std::nullopt;
+  }
+  if ((parsed_command->has_value() || parsed_command_argv->has_value()) &&
+      parsed_command_shell->has_value()) {
+    return std::nullopt;
+  }
+
+  const auto parsed_group_tags = ParseNormalizedTagsArray(group_tags);
+  if (!parsed_group_tags.has_value()) {
+    return std::nullopt;
+  }
+
+  const std::string parsed_name = json::value_to<std::string>(*name);
+  const std::string parsed_workspace_root = json::value_to<std::string>(*workspace_root);
+  const std::string parsed_title = json::value_to<std::string>(*title);
+  if (parsed_name.empty() || parsed_workspace_root.empty() || parsed_title.empty()) {
+    return std::nullopt;
+  }
+
+  return HostSessionSetupPayload{
+      .setup_id = std::move(*parsed_setup_id),
+      .name = parsed_name,
+      .provider = *parsed_provider,
+      .workspace_root = parsed_workspace_root,
+      .title = parsed_title,
+      .conversation_id = std::move(*parsed_conversation_id),
+      .group_tags = std::move(*parsed_group_tags),
+      .command_argv =
+          parsed_command_argv->has_value() ? std::move(*parsed_command_argv) : std::move(*parsed_command),
+      .command_shell = std::move(*parsed_command_shell),
   };
 }
 

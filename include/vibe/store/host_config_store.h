@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+#include "vibe/session/session_types.h"
+
 namespace vibe::store {
 
 inline constexpr std::string_view kDefaultAdminHost = "127.0.0.1";
@@ -22,6 +24,20 @@ struct ProviderCommandOverride {
   [[nodiscard]] auto operator==(const ProviderCommandOverride& other) const -> bool = default;
 };
 
+struct SessionSetupRecord {
+  std::string setup_id;
+  std::string name;
+  vibe::session::ProviderType provider{vibe::session::ProviderType::Codex};
+  std::string workspace_root;
+  std::string title;
+  std::optional<std::string> conversation_id;
+  std::vector<std::string> group_tags;
+  std::optional<std::vector<std::string>> command_argv;
+  std::optional<std::string> command_shell;
+
+  [[nodiscard]] auto operator==(const SessionSetupRecord& other) const -> bool = default;
+};
+
 struct HostIdentity {
   std::string host_id;
   std::string display_name;
@@ -33,6 +49,7 @@ struct HostIdentity {
   std::uint16_t remote_port{kDefaultRemotePort};
   ProviderCommandOverride codex_command;
   ProviderCommandOverride claude_command;
+  std::vector<SessionSetupRecord> session_setups;
 
   [[nodiscard]] auto operator==(const HostIdentity& other) const -> bool = default;
 };
@@ -49,6 +66,7 @@ struct HostIdentity {
       .remote_port = kDefaultRemotePort,
       .codex_command = {},
       .claude_command = {},
+      .session_setups = {},
   };
 }
 

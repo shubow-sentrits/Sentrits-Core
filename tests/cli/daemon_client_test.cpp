@@ -12,12 +12,33 @@ namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 
 TEST(DaemonClientTest, BuildsCreateSessionRequestBody) {
-  const std::string body =
-      BuildCreateSessionRequestBody(vibe::session::ProviderType::Codex, "/tmp/project", "demo");
+  const std::string body = BuildCreateSessionRequestBody(CreateSessionRequest{
+      .provider = vibe::session::ProviderType::Codex,
+      .workspace_root = "/tmp/project",
+      .title = "demo",
+      .setup_id = std::nullopt,
+      .command_argv = std::nullopt,
+      .command_shell = std::nullopt,
+  });
 
   EXPECT_NE(body.find("\"provider\":\"codex\""), std::string::npos);
   EXPECT_NE(body.find("\"workspaceRoot\":\"/tmp/project\""), std::string::npos);
   EXPECT_NE(body.find("\"title\":\"demo\""), std::string::npos);
+}
+
+TEST(DaemonClientTest, BuildsCreateSessionRequestBodyWithSetupAndShellCommand) {
+  const std::string body = BuildCreateSessionRequestBody(CreateSessionRequest{
+      .provider = std::nullopt,
+      .workspace_root = "/tmp/project",
+      .title = "demo",
+      .setup_id = "setup_1",
+      .command_argv = std::nullopt,
+      .command_shell = "codex \"$(cat prompt.md)\"",
+  });
+
+  EXPECT_NE(body.find("\"setupId\":\"setup_1\""), std::string::npos);
+  EXPECT_NE(body.find("\"commandShell\":\"codex \\\"$(cat prompt.md)\\\"\""), std::string::npos);
+  EXPECT_EQ(body.find("\"provider\":"), std::string::npos);
 }
 
 TEST(DaemonClientTest, ParsesCreatedSessionId) {
@@ -83,9 +104,16 @@ TEST(DaemonClientTest, ReturnsNulloptWhenDaemonIsUnavailable) {
   acceptor.close();
 
   EXPECT_NO_THROW({
-    const auto session_id =
-        CreateSession(DaemonEndpoint{.host = "127.0.0.1", .port = port},
-                      vibe::session::ProviderType::Codex, "/tmp/project", "demo");
+    const auto session_id = CreateSession(
+        DaemonEndpoint{.host = "127.0.0.1", .port = port},
+        CreateSessionRequest{
+            .provider = vibe::session::ProviderType::Codex,
+            .workspace_root = "/tmp/project",
+            .title = "demo",
+            .setup_id = std::nullopt,
+            .command_argv = std::nullopt,
+            .command_shell = std::nullopt,
+        });
     EXPECT_FALSE(session_id.has_value());
   });
 }

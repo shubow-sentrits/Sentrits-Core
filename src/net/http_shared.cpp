@@ -32,6 +32,24 @@ namespace json = boost::json;
 auto MakeJsonResponse(const HttpRequest& request, http::status status, std::string body) -> HttpResponse;
 auto MakeTextResponse(const HttpRequest& request, http::status status, std::string_view content_type,
                       std::string body) -> HttpResponse;
+auto MakeRandomHexToken(std::size_t bytes) -> std::string;
+
+template <typename Collection, typename Predicate, typename Value>
+void UpsertBy(Collection& collection, Predicate predicate, Value&& value) {
+  const auto it = std::ranges::find_if(collection, predicate);
+  if (it == collection.end()) {
+    collection.push_back(std::forward<Value>(value));
+    return;
+  }
+  *it = std::forward<Value>(value);
+}
+
+template <typename Collection, typename Predicate>
+auto RemoveBy(Collection& collection, Predicate predicate) -> bool {
+  const auto size_before = collection.size();
+  collection.erase(std::remove_if(collection.begin(), collection.end(), predicate), collection.end());
+  return collection.size() != size_before;
+}
 
 auto EnvPath(const char* name) -> std::optional<std::filesystem::path> {
   const char* value = std::getenv(name);
@@ -244,14 +262,9 @@ auto MakeSnapshotResponse(const HttpRequest& request, const vibe::session::Sessi
 }
 
 auto ApplyConfiguredProviderOverride(vibe::service::CreateSessionRequest request,
-                                     const vibe::store::HostConfigStore* host_config_store)
+                                     const vibe::store::HostIdentity* host_identity)
     -> vibe::service::CreateSessionRequest {
-  if (request.command_argv.has_value() || host_config_store == nullptr) {
-    return request;
-  }
-
-  const auto host_identity = host_config_store->LoadHostIdentity();
-  if (!host_identity.has_value()) {
+  if (request.command_argv.has_value() || request.command_shell.has_value() || host_identity == nullptr) {
     return request;
   }
 
@@ -273,6 +286,81 @@ auto ApplyConfiguredProviderOverride(vibe::service::CreateSessionRequest request
   request.command_argv->insert(request.command_argv->end(), command_override->args.begin(),
                                command_override->args.end());
   return request;
+}
+
+auto FindSessionSetup(vibe::store::HostIdentity& identity, const std::string& setup_id)
+    -> vibe::store::SessionSetupRecord* {
+  for (auto& setup : identity.session_setups) {
+    if (setup.setup_id == setup_id) {
+      return &setup;
+    }
+  }
+  return nullptr;
+}
+
+auto ResolveCreateSessionRequest(const vibe::net::CreateSessionRequestPayload& payload,
+                                 const vibe::store::HostConfigStore* host_config_store)
+    -> std::optional<vibe::service::CreateSessionRequest> {
+  std::optional<vibe::store::HostIdentity> host_identity =
+      host_config_store != nullptr ? host_config_store->LoadHostIdentity() : std::nullopt;
+  const vibe::store::SessionSetupRecord* setup = nullptr;
+  if (payload.setup_id.has_value()) {
+    if (!host_identity.has_value()) {
+      return std::nullopt;
+    }
+    setup = FindSessionSetup(*host_identity, *payload.setup_id);
+    if (setup == nullptr) {
+      return std::nullopt;
+    }
+  }
+
+  const std::optional<vibe::session::ProviderType> provider =
+      payload.provider.has_value() ? payload.provider
+                                   : (setup != nullptr ? std::optional(setup->provider) : std::nullopt);
+  const std::optional<std::string> workspace_root =
+      payload.workspace_root.has_value() ? payload.workspace_root
+                                         : (setup != nullptr ? std::optional(setup->workspace_root) : std::nullopt);
+  const std::optional<std::string> title =
+      payload.title.has_value() ? payload.title
+                                : (setup != nullptr ? std::optional(setup->title) : std::nullopt);
+  if (!provider.has_value() || !workspace_root.has_value() || !title.has_value()) {
+    return std::nullopt;
+  }
+
+  vibe::service::CreateSessionRequest request{
+      .provider = *provider,
+      .workspace_root = *workspace_root,
+      .title = *title,
+      .conversation_id = payload.conversation_id.has_value()
+                             ? payload.conversation_id
+                             : (setup != nullptr ? setup->conversation_id : std::nullopt),
+      .command_argv = payload.command_argv.has_value()
+                          ? payload.command_argv
+                          : (setup != nullptr ? setup->command_argv : std::nullopt),
+      .command_shell = payload.command_shell.has_value()
+                           ? payload.command_shell
+                           : (setup != nullptr ? setup->command_shell : std::nullopt),
+      .group_tags = payload.group_tags.has_value()
+                        ? *payload.group_tags
+                        : (setup != nullptr ? setup->group_tags : std::vector<std::string>{}),
+  };
+  return ApplyConfiguredProviderOverride(std::move(request),
+                                         host_identity.has_value() ? &*host_identity : nullptr);
+}
+
+auto MakeSessionSetupRecord(const vibe::net::HostSessionSetupPayload& payload)
+    -> vibe::store::SessionSetupRecord {
+  return vibe::store::SessionSetupRecord{
+      .setup_id = payload.setup_id.value_or("setup_" + MakeRandomHexToken(8)),
+      .name = payload.name,
+      .provider = payload.provider,
+      .workspace_root = payload.workspace_root,
+      .title = payload.title,
+      .conversation_id = payload.conversation_id,
+      .group_tags = vibe::session::NormalizeGroupTags(payload.group_tags),
+      .command_argv = payload.command_argv,
+      .command_shell = payload.command_shell,
+  };
 }
 
 auto ReadFile(const std::filesystem::path& path) -> std::optional<std::string> {
@@ -742,6 +830,85 @@ auto HandleHostConfig(const HttpRequest& request, const HttpRouteContext& contex
                                          context.remote_tls_enabled));
 }
 
+auto RequireHostSetupAuthorization(const HttpRequest& request, const HttpRouteContext& context)
+    -> std::optional<HttpResponse> {
+  return RequireAuthorization(request, context, vibe::auth::AuthorizationAction::ManageHostSetups);
+}
+
+auto HandleListHostSetups(const HttpRequest& request, const HttpRouteContext& context) -> HttpResponse {
+  if (const auto auth_response = RequireHostSetupAuthorization(request, context); auth_response.has_value()) {
+    return *auth_response;
+  }
+  if (context.host_config_store == nullptr) {
+    return MakeJsonResponse(request, http::status::service_unavailable,
+                            "{\"error\":\"host config unavailable\"}");
+  }
+
+  const auto host_identity =
+      context.host_config_store->LoadHostIdentity().value_or(vibe::store::MakeDefaultHostIdentity());
+  return MakeJsonResponse(request, http::status::ok, ToJson(host_identity.session_setups));
+}
+
+auto HandleSaveHostSetup(const HttpRequest& request, const HttpRouteContext& context) -> HttpResponse {
+  if (const auto auth_response = RequireHostSetupAuthorization(request, context); auth_response.has_value()) {
+    return *auth_response;
+  }
+  if (context.host_config_store == nullptr) {
+    return MakeJsonResponse(request, http::status::service_unavailable,
+                            "{\"error\":\"host config unavailable\"}");
+  }
+
+  const auto payload = ParseHostSessionSetupRequest(request.body());
+  if (!payload.has_value()) {
+    return MakeJsonResponse(request, http::status::bad_request,
+                            "{\"error\":\"invalid host setup request\"}");
+  }
+
+  auto host_identity =
+      context.host_config_store->LoadHostIdentity().value_or(vibe::store::MakeDefaultHostIdentity());
+  const auto setup = MakeSessionSetupRecord(*payload);
+  UpsertBy(host_identity.session_setups,
+           [&](const vibe::store::SessionSetupRecord& existing) { return existing.setup_id == setup.setup_id; },
+           setup);
+  if (!context.host_config_store->SaveHostIdentity(host_identity)) {
+    return MakeJsonResponse(request, http::status::internal_server_error,
+                            "{\"error\":\"failed to save host setup\"}");
+  }
+
+  const auto* saved = FindSessionSetup(host_identity, setup.setup_id);
+  if (saved == nullptr) {
+    return MakeJsonResponse(request, http::status::internal_server_error,
+                            "{\"error\":\"failed to load saved host setup\"}");
+  }
+  return MakeJsonResponse(request, http::status::ok, ToJson(*saved));
+}
+
+auto HandleDeleteHostSetup(const HttpRequest& request, const HttpRouteContext& context,
+                           std::string setup_id) -> HttpResponse {
+  if (const auto auth_response = RequireHostSetupAuthorization(request, context); auth_response.has_value()) {
+    return *auth_response;
+  }
+  if (context.host_config_store == nullptr) {
+    return MakeJsonResponse(request, http::status::service_unavailable,
+                            "{\"error\":\"host config unavailable\"}");
+  }
+  if (setup_id.empty()) {
+    return MakeJsonResponse(request, http::status::bad_request, "{\"error\":\"invalid setup id\"}");
+  }
+
+  auto host_identity =
+      context.host_config_store->LoadHostIdentity().value_or(vibe::store::MakeDefaultHostIdentity());
+  if (!RemoveBy(host_identity.session_setups,
+                [&](const vibe::store::SessionSetupRecord& existing) { return existing.setup_id == setup_id; })) {
+    return MakeJsonResponse(request, http::status::not_found, "{\"error\":\"setup not found\"}");
+  }
+  if (!context.host_config_store->SaveHostIdentity(host_identity)) {
+    return MakeJsonResponse(request, http::status::internal_server_error,
+                            "{\"error\":\"failed to delete host setup\"}");
+  }
+  return MakeJsonResponse(request, http::status::ok, "{\"status\":\"deleted\"}");
+}
+
 auto RequireLocalHostAdmin(const HttpRequest& request, const HttpRouteContext& context)
     -> std::optional<HttpResponse> {
   return RequireLocalAuthorization(request, context, vibe::auth::AuthorizationAction::ConfigureHost);
@@ -828,8 +995,13 @@ auto HandleCreateSessionRequest(const HttpRequest& request, vibe::service::Sessi
                             "{\"error\":\"invalid create session request\"}");
   }
 
-  const auto created =
-      session_manager.CreateSession(ApplyConfiguredProviderOverride(*parsed_request, context.host_config_store));
+  const auto resolved_request = ResolveCreateSessionRequest(*parsed_request, context.host_config_store);
+  if (!resolved_request.has_value()) {
+    return MakeJsonResponse(request, http::status::bad_request,
+                            "{\"error\":\"failed to resolve create session request\"}");
+  }
+
+  const auto created = session_manager.CreateSession(*resolved_request);
   if (!created.has_value()) {
     return MakeJsonResponse(request, http::status::internal_server_error,
                             "{\"error\":\"failed to create session\"}");
@@ -1070,6 +1242,14 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
     return HandleHostConfig(request, context);
   }
 
+  if (request.method() == http::verb::get && request.target() == "/host/setups") {
+    return HandleListHostSetups(request, context);
+  }
+
+  if (request.method() == http::verb::post && request.target() == "/host/setups") {
+    return HandleSaveHostSetup(request, context);
+  }
+
   if (request.method() == http::verb::get && request.target() == "/host/tls/certificate") {
     return HandleHostTlsCertificate(request, context);
   }
@@ -1210,6 +1390,14 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
       return MakeJsonResponse(request, http::status::ok,
                               std::string("{\"status\":\"") +
                                   (is_expire ? "expired" : "removed") + "\"}");
+    }
+  }
+
+  if (request.method() == http::verb::delete_) {
+    constexpr std::string_view host_setups_prefix = "/host/setups/";
+    const std::string target = std::string(target_path);
+    if (target.rfind(host_setups_prefix, 0) == 0) {
+      return HandleDeleteHostSetup(request, context, target.substr(host_setups_prefix.size()));
     }
   }
 
