@@ -38,7 +38,7 @@ jobs:
           repository: shubow-sentrits/Sentrits-Web
           ref: ${{ needs.resolve-web-revision.outputs.web_revision }}
           path: Sentrits-Web
-          token: ${{ secrets.SENTRITS_REPO_READ_TOKEN || github.token }}
+          ssh-key: ${{ secrets.DEPLOY_KEY_SENTRITS_WEB }}
 
       - name: Build packaged web assets
         uses: ./.github/actions/package-web-assets
@@ -97,7 +97,7 @@ jobs:
           repository: shubow-sentrits/Sentrits-Web
           ref: ${{ needs.resolve-web-revision.outputs.web_revision }}
           path: Sentrits-Web
-          token: ${{ secrets.SENTRITS_REPO_READ_TOKEN || github.token }}
+          ssh-key: ${{ secrets.DEPLOY_KEY_SENTRITS_WEB }}
 
       - name: Build packaged web assets
         uses: ./.github/actions/package-web-assets
