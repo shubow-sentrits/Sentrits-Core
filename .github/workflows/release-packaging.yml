@@ -107,7 +107,14 @@ jobs:
         with:
           web-repo-path: ${{ github.workspace }}/Sentrits-Web
 
+      - name: Install macOS packaging toolchain
+        run: |
+          brew install boost openssl@3 ninja
+
       - name: Configure macOS packaging build
+        env:
+          OPENSSL_ROOT_DIR: /opt/homebrew/opt/openssl@3
+          CMAKE_PREFIX_PATH: /opt/homebrew/opt/boost;/opt/homebrew/opt/openssl@3
         run: |
           cmake -S . -B build -G Ninja \
             -DSENTRITS_BUILD_TESTS=ON \
