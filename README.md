@@ -27,6 +27,7 @@ Sentrits is built for **supervision and intervention**, not for turning your pho
 - [Architecture At A Glance](#architecture-at-a-glance)
 - [Current Scope](#current-scope)
 - [Start Here](#start-here)
+- [Releases](#releases)
 
 ---
 
@@ -175,8 +176,14 @@ Sentrits is **not** currently trying to solve:
 - `development_memo/api_and_event_schema.md`
 - `development_memo/mvp_checklist.md`
 - `development_memo/known_limitations.md`
+- `packaging/releases.md`
 
 Packaging/bootstrap note:
 
 - `sentrits service print` shows the user-scoped service definition for the current platform
 - `sentrits service install` writes that service file into the current user's home directory
+
+## Releases
+
+- GitHub Releases: `https://github.com/shubow-sentrits/Sentrits-Core/releases`
+- Maintainer release notes: `packaging/releases.md`

@@ -65,3 +65,7 @@ The runtime now supports packaged asset lookup via:
 - `SENTRITS_VENDOR_ROOT`
 
 If those are unset, the compiled default packaged web root is used, followed by source-tree development fallbacks.
+
+Maintainer release instructions:
+
+- `packaging/releases.md`
