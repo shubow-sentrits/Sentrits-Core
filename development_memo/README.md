@@ -26,9 +26,7 @@ Use code as the source of truth. Update or remove docs here when they drift away
 ## Future Design Docs
 
 - [future/agent_session_network_development_plan.md](future/agent_session_network_development_plan.md)
-- [future/session_terminal_multiplexer_and_semantic_runtime.md](future/session_terminal_multiplexer_and_semantic_runtime.md)
-- [future/session_terminal_multiplexer_v1.md](future/session_terminal_multiplexer_v1.md)
-- [future/session_terminal_multiplexer_wire_compatibility.md](future/session_terminal_multiplexer_wire_compatibility.md)
+- [future/agent_session_network_progress.md](future/agent_session_network_progress.md)
 - [future/session_signal_map.md](future/session_signal_map.md)
 - [future/pty_semantic_extractor.md](future/pty_semantic_extractor.md)
 
