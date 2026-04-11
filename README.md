@@ -185,5 +185,5 @@ Packaging/bootstrap note:
 
 ## Releases
 
-- GitHub Releases: `https://github.com/shubow-sentrits/Sentrits-Core/releases`
+- GitHub Releases: [Sentrits-Core Release](https://github.com/shubow-sentrits/Sentrits-Core/releases)
 - Maintainer release notes: `packaging/releases.md`
