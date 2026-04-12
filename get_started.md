@@ -275,6 +275,7 @@ ctest --test-dir build --output-on-failure -R http
 More build/test detail:
 
 - `development_memo/build_and_test.md`
+- `development_memo/tracing_and_debugging.md`
 
 ### Run The Daemon
 
@@ -303,6 +304,16 @@ Disable UDP discovery broadcast if needed:
 ```bash
 ./build/sentrits serve --no-udp-discovery
 ```
+
+Enable maintainer tracing in a `Debug` build:
+
+```bash
+SENTRITS_DEBUG_TRACE=1 ./build/sentrits serve
+```
+
+More trace/debug detail:
+
+- `development_memo/tracing_and_debugging.md`
 
 ### Basic Reachability Checks
 

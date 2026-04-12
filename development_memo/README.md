@@ -16,6 +16,8 @@ Use code as the source of truth. Update or remove docs here when they drift away
   - current REST and WebSocket contract
 - [build_and_test.md](build_and_test.md)
   - canonical build and test workflow
+- [tracing_and_debugging.md](tracing_and_debugging.md)
+  - current runtime trace gates and maintainer debugging workflow
 - [packaging_architecture.md](packaging_architecture.md)
   - current daemon-first packaging direction
 - [mvp_checklist.md](mvp_checklist.md)

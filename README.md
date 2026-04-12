@@ -174,6 +174,7 @@ Sentrits is **not** currently trying to solve:
 - `development_memo/README.md`
 - `development_memo/system_architecture.md`
 - `development_memo/api_and_event_schema.md`
+- `development_memo/tracing_and_debugging.md`
 - `development_memo/mvp_checklist.md`
 - `development_memo/known_limitations.md`
 - `packaging/releases.md`
