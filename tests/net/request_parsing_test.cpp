@@ -33,12 +33,12 @@ TEST(RequestParsingTest, ParsesCreateSessionRequestWithNormalizedGroupTags) {
   EXPECT_EQ(*request->group_tags, (std::vector<std::string>{"frontend", "mvp"}));
 }
 
-TEST(RequestParsingTest, ParsesCreateSessionRequestWithShellCommandAndSetupId) {
+TEST(RequestParsingTest, ParsesCreateSessionRequestWithShellCommandAndRecordId) {
   const auto request = ParseCreateSessionRequest(
-      R"({"setupId":"setup_1","commandShell":"codex \"$(cat prompt.md)\""})");
+      R"({"recordId":"rec_1","commandShell":"codex \"$(cat prompt.md)\""})");
   ASSERT_TRUE(request.has_value());
-  ASSERT_TRUE(request->setup_id.has_value());
-  EXPECT_EQ(*request->setup_id, "setup_1");
+  ASSERT_TRUE(request->record_id.has_value());
+  EXPECT_EQ(*request->record_id, "rec_1");
   ASSERT_TRUE(request->command_shell.has_value());
   EXPECT_EQ(*request->command_shell, "codex \"$(cat prompt.md)\"");
   EXPECT_FALSE(request->command_argv.has_value());
@@ -86,18 +86,6 @@ TEST(RequestParsingTest, ParsesHostConfigRequestWithListenerAndProviderOverrides
             (std::vector<std::string>{"/opt/bin/claude", "--print"}));
 }
 
-TEST(RequestParsingTest, ParsesHostSessionSetupRequest) {
-  const auto payload = ParseHostSessionSetupRequest(
-      R"({"name":"Prompt Setup","provider":"codex","workspaceRoot":".","title":"prompt","commandShell":"codex \"$(cat prompt.md)\"","groupTags":["Frontend","frontend"]})");
-  ASSERT_TRUE(payload.has_value());
-  EXPECT_EQ(payload->name, "Prompt Setup");
-  EXPECT_EQ(payload->provider, vibe::session::ProviderType::Codex);
-  EXPECT_EQ(payload->workspace_root, ".");
-  EXPECT_EQ(payload->title, "prompt");
-  ASSERT_TRUE(payload->command_shell.has_value());
-  EXPECT_EQ(*payload->command_shell, "codex \"$(cat prompt.md)\"");
-  EXPECT_EQ(payload->group_tags, (std::vector<std::string>{"frontend"}));
-}
 
 TEST(RequestParsingTest, RejectsInvalidHostConfigRequest) {
   EXPECT_FALSE(ParseHostConfigRequest(

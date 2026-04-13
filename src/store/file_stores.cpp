@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -350,25 +351,24 @@ auto ParseProviderCommandOverride(const json::value* value)
   return result;
 }
 
-auto ParseSessionSetupRecord(const json::value& value)
-    -> std::optional<vibe::store::SessionSetupRecord> {
+auto ParseLaunchRecord(const json::value& value) -> std::optional<vibe::store::LaunchRecord> {
   if (!value.is_object()) {
     return std::nullopt;
   }
 
   const json::object& object = value.as_object();
-  const auto* setup_id = object.if_contains("setupId");
-  const auto* name = object.if_contains("name");
+  const auto* record_id = object.if_contains("recordId");
   const auto* provider = object.if_contains("provider");
   const auto* workspace_root = object.if_contains("workspaceRoot");
   const auto* title = object.if_contains("title");
+  const auto* launched_at = object.if_contains("launchedAtUnixMs");
   const auto* conversation_id = object.if_contains("conversationId");
   const auto* group_tags = object.if_contains("groupTags");
   const auto* command_argv = object.if_contains("commandArgv");
   const auto* command_shell = object.if_contains("commandShell");
 
-  if (setup_id == nullptr || name == nullptr || provider == nullptr || workspace_root == nullptr ||
-      title == nullptr || !setup_id->is_string() || !name->is_string() || !provider->is_string() ||
+  if (record_id == nullptr || provider == nullptr || workspace_root == nullptr ||
+      title == nullptr || !record_id->is_string() || !provider->is_string() ||
       !workspace_root->is_string() || !title->is_string()) {
     return std::nullopt;
   }
@@ -381,12 +381,20 @@ auto ParseSessionSetupRecord(const json::value& value)
     return std::nullopt;
   }
 
-  vibe::store::SessionSetupRecord record{
-      .setup_id = std::string(setup_id->as_string()),
-      .name = std::string(name->as_string()),
+  std::int64_t launched_at_ms = 0;
+  if (launched_at != nullptr) {
+    if (!launched_at->is_int64()) {
+      return std::nullopt;
+    }
+    launched_at_ms = launched_at->as_int64();
+  }
+
+  vibe::store::LaunchRecord record{
+      .record_id = std::string(record_id->as_string()),
       .provider = *parsed_provider,
       .workspace_root = std::string(workspace_root->as_string()),
       .title = std::string(title->as_string()),
+      .launched_at_unix_ms = launched_at_ms,
       .conversation_id = conversation_id != nullptr
                              ? std::make_optional(std::string(conversation_id->as_string()))
                              : std::nullopt,
@@ -394,8 +402,7 @@ auto ParseSessionSetupRecord(const json::value& value)
       .command_argv = std::nullopt,
       .command_shell = std::nullopt,
   };
-  if (record.setup_id.empty() || record.name.empty() || record.workspace_root.empty() ||
-      record.title.empty()) {
+  if (record.record_id.empty() || record.workspace_root.empty() || record.title.empty()) {
     return std::nullopt;
   }
 
@@ -442,13 +449,13 @@ auto ParseSessionSetupRecord(const json::value& value)
   return record;
 }
 
-auto ToJsonValue(const vibe::store::SessionSetupRecord& record) -> json::value {
+auto ToJsonValue(const vibe::store::LaunchRecord& record) -> json::value {
   json::object object;
-  object["setupId"] = record.setup_id;
-  object["name"] = record.name;
+  object["recordId"] = record.record_id;
   object["provider"] = std::string(vibe::session::ToString(record.provider));
   object["workspaceRoot"] = record.workspace_root;
   object["title"] = record.title;
+  object["launchedAtUnixMs"] = record.launched_at_unix_ms;
   if (record.conversation_id.has_value()) {
     object["conversationId"] = *record.conversation_id;
   }
@@ -532,19 +539,33 @@ auto HostIdentityFromJsonWithDefaults(const json::value& value) -> std::optional
     identity.claude_command = std::move(*claude_command);
   }
 
-  if (const auto* parsed_session_setups = object.if_contains("sessionSetups");
-      parsed_session_setups != nullptr) {
-    if (!parsed_session_setups->is_array()) {
+  // Load bounded launch records. The old "sessionSetups" key is silently ignored
+  // (treated as empty) so existing host_identity.json files remain valid.
+  if (const auto* parsed_records = object.if_contains("launchRecords");
+      parsed_records != nullptr) {
+    if (!parsed_records->is_array()) {
       return std::nullopt;
     }
-    identity.session_setups.clear();
-    for (const auto& item : parsed_session_setups->as_array()) {
-      auto parsed = ParseSessionSetupRecord(item);
+    identity.launch_records.clear();
+    for (const auto& item : parsed_records->as_array()) {
+      auto parsed = ParseLaunchRecord(item);
       if (!parsed.has_value()) {
         return std::nullopt;
       }
-      identity.session_setups.push_back(std::move(*parsed));
+      identity.launch_records.push_back(std::move(*parsed));
     }
+  }
+
+  if (const auto* parsed_max = object.if_contains("maxLaunchRecords");
+      parsed_max != nullptr) {
+    if (!parsed_max->is_int64()) {
+      return std::nullopt;
+    }
+    const auto max_val = parsed_max->as_int64();
+    if (max_val < 1 || max_val > std::numeric_limits<std::int64_t>::max()) {
+      return std::nullopt;
+    }
+    identity.max_launch_records = static_cast<std::size_t>(max_val);
   }
 
   return identity;
@@ -574,11 +595,12 @@ auto ToJsonValue(const HostIdentity& identity) -> json::value {
   provider_commands["codex"] = to_command_json(identity.codex_command);
   provider_commands["claude"] = to_command_json(identity.claude_command);
   object["providerCommands"] = std::move(provider_commands);
-  json::array session_setups;
-  for (const auto& setup : identity.session_setups) {
-    session_setups.emplace_back(ToJsonValue(setup));
+  json::array launch_records;
+  for (const auto& record : identity.launch_records) {
+    launch_records.emplace_back(ToJsonValue(record));
   }
-  object["sessionSetups"] = std::move(session_setups);
+  object["launchRecords"] = std::move(launch_records);
+  object["maxLaunchRecords"] = static_cast<std::int64_t>(identity.max_launch_records);
   return object;
 }
 

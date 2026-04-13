@@ -7,6 +7,9 @@
 #include <string_view>
 #include <vector>
 
+// Default maximum number of recent launch records to retain per host.
+inline constexpr std::size_t kDefaultMaxLaunchRecords = 50;
+
 #include "vibe/session/session_types.h"
 
 namespace vibe::store {
@@ -24,18 +27,21 @@ struct ProviderCommandOverride {
   [[nodiscard]] auto operator==(const ProviderCommandOverride& other) const -> bool = default;
 };
 
-struct SessionSetupRecord {
-  std::string setup_id;
-  std::string name;
+// A bounded recent-launch record. Records are auto-saved when sessions are
+// created and trimmed to max_launch_records. There is no named-preset model;
+// client-side pin/favorite is the appropriate curation layer.
+struct LaunchRecord {
+  std::string record_id;
   vibe::session::ProviderType provider{vibe::session::ProviderType::Codex};
   std::string workspace_root;
   std::string title;
+  std::int64_t launched_at_unix_ms{0};
   std::optional<std::string> conversation_id;
   std::vector<std::string> group_tags;
   std::optional<std::vector<std::string>> command_argv;
   std::optional<std::string> command_shell;
 
-  [[nodiscard]] auto operator==(const SessionSetupRecord& other) const -> bool = default;
+  [[nodiscard]] auto operator==(const LaunchRecord& other) const -> bool = default;
 };
 
 struct HostIdentity {
@@ -49,7 +55,8 @@ struct HostIdentity {
   std::uint16_t remote_port{kDefaultRemotePort};
   ProviderCommandOverride codex_command;
   ProviderCommandOverride claude_command;
-  std::vector<SessionSetupRecord> session_setups;
+  std::vector<LaunchRecord> launch_records;
+  std::size_t max_launch_records{kDefaultMaxLaunchRecords};
 
   [[nodiscard]] auto operator==(const HostIdentity& other) const -> bool = default;
 };
@@ -66,7 +73,8 @@ struct HostIdentity {
       .remote_port = kDefaultRemotePort,
       .codex_command = {},
       .claude_command = {},
-      .session_setups = {},
+      .launch_records = {},
+      .max_launch_records = kDefaultMaxLaunchRecords,
   };
 }
 

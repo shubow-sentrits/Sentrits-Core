@@ -171,97 +171,78 @@ Implications:
 
 ## Proposed Source-of-Truth Model
 
+### Why "setup" is the wrong concept
+
+The original implementation built a named `sessionSetups` model — CRUD-managed, named presets, explicit save/delete. That is the wrong design.
+
+The correct model is one host-owned bounded launch-record store. The key distinctions:
+
+- **Do not** build a separate "saved setups" model and a separate "recent history" model.
+- **Do** converge on one bounded store of recent launches, auto-populated when sessions are created.
+- The host trims the store to `maxLaunchRecords` (default 50). Oldest entries fall off automatically.
+- If a client wants to pin or favorite a record, that is client-side behavior, not a second host-owned model.
+
+The word "setup" is replaced by "launch record" in all new surfaces. Where existing API compatibility requires a temporary bridge, it is called out explicitly. There is no remaining use of `sessionSetups` in the runtime.
+
 ### Host Config
 
-Host config should remain the runtime-owned source of truth for data that belongs to the host rather than to any one session.
+Host config remains the runtime-owned source of truth for data that belongs to the host.
 
-Keep in host config:
+Contents:
 
 - `hostId`
 - `displayName`
 - listener config and TLS paths
-- per-provider default command override
-- reusable session setup records
+- per-provider default command override (`providerCommands`)
+- `launchRecords`: bounded array of recent `LaunchRecord` entries (most-recent-first)
+- `maxLaunchRecords`: configurable cap, default 50
 
-Add a host-owned reusable setup record collection, for example:
+Each `LaunchRecord` contains:
 
-- `sessionSetups` or `savedSessionSetups`
-
-Each setup record should include:
-
-- `setupId`
-- `name`
+- `recordId` (auto-generated `rec_<hex>`)
 - `provider`
 - `workspaceRoot`
 - `title`
-- launch mode
+- `launchedAtUnixMs` (unix epoch ms, set at create time)
 - optional `conversationId`
 - optional `groupTags`
-- command representation
-- timestamps such as `createdAt` / `lastUsedAt`
+- optional `commandArgv` (exact argv override)
+- optional `commandShell` (shell-expanded command, executed via `/bin/sh -lc`)
 
-Recommended command representation:
+No `name` field. Records are auto-managed history, not named presets.
 
-- preserve the existing explicit argv form for exact launches
-- add a shell-command form for shell-expanded launches
-
-That yields a runtime-owned model that can represent both:
-
-- exact argv launches
-- shell-expanded launches like `codex "$(cat prompt.md)"`
-
-Suggested shape:
-
-- `launchMode: "provider_default" | "argv" | "shell"`
-- `commandArgv?: string[]`
-- `commandShell?: string`
-
-Rationale:
-
-- Existing `command: string[]` is safe and already wired through the runtime.
-- Shell form is needed to preserve expansion patterns from CLI and clients.
-- A launch-mode discriminator avoids overloading a single field with ambiguous semantics.
+Backward compatibility: existing `host_identity.json` files with the old `sessionSetups` key load as empty `launchRecords`. The `maxLaunchRecords` field loads with default 50 when absent.
 
 ### Session Create Request
 
-Session create should stay additive and request-scoped.
+The create request stays additive and request-scoped.
 
-The create request should continue to support direct launch inputs:
+Accepted fields:
 
 - `provider`
 - `workspaceRoot`
 - `title`
 - optional `conversationId`
 - optional `groupTags`
-- optional explicit launch override
-
-Add optional setup-based fields:
-
-- `setupId`
-- optional `saveSetup`
-- optional `setupName`
+- optional `commandArgv` (exact argv; `command` array is a compatibility alias)
+- optional `commandShell` (shell-expanded command string)
+- optional `recordId` (reference a previously saved launch record as defaults)
 
 Behavior:
 
-- if `setupId` is provided, runtime resolves the host-owned setup first
-- any explicitly provided create-request fields override the referenced setup for that launch
-- if `saveSetup` is true, runtime stores the resolved launch inputs back into host-owned setup storage
-- if `setupName` is present with `saveSetup`, runtime creates or updates a named reusable setup
+- if `recordId` is provided, runtime resolves that `LaunchRecord` first
+- any explicitly provided create-request fields override the referenced record for that launch
+- after a successful session create, the runtime auto-saves a new `LaunchRecord` and trims to `maxLaunchRecords`
 
-This preserves a simple create-session entry point while moving reusable setup ownership to the host.
+There is no `saveSetup`, `setupName`, or `setupId`. Records are auto-saved; there is no manual save flow.
 
 ### Relationship Between Provider, Custom Command, Title, and Workspace
 
-Recommended rules:
-
-- `provider` remains a first-class field in both host-owned setups and create-session requests.
-- Host-level provider command override remains the default executable/argv baseline for a provider when no per-session override is supplied.
-- A reusable setup may include either:
-  - no explicit command override, meaning "use provider default / host provider override"
-  - an explicit argv override
-  - a shell command override
-- `title` and `workspaceRoot` belong in reusable setup because they are part of repeated session bootstrap intent, not just ad hoc request metadata.
-- `conversationId` stays optional and request-friendly; if reused today, it can be stored in setup records, but clients should treat reuse carefully because some providers may not want stale conversation identifiers replayed implicitly.
+- `provider` is a first-class field in both `LaunchRecord` and create-session requests.
+- Host-level provider command override remains the default executable/argv baseline when no per-session override is supplied.
+- A `LaunchRecord` may contain no command override (use provider default), an exact argv override, or a shell command override.
+- `title` and `workspaceRoot` are stored in `LaunchRecord` as part of repeated session intent.
+- `conversationId` is stored in `LaunchRecord` only when provided at create time. Clients should be cautious about replaying stale conversation identifiers.
 
 ### Host Display Name and Host Identity
 
@@ -272,187 +253,104 @@ Source of truth:
 - clients consume it as host-owned identity metadata
 - iOS local alias stays a client-local annotation layered on top
 
-Recommended model:
+The important distinction:
 
-- allow runtime host display name to be set before daemon enable/bootstrap through CLI config commands
-- allow runtime host display name to be changed later through:
-  - runtime CLI
-  - local host web/admin surface
-  - maintained remote clients when authorized against the local-admin/configure-host capability path
-
-The important distinction is:
-
-- `displayName`: remote host-owned, shared identity
-- `alias`: local client-owned convenience label
+- `displayName`: runtime-owned, shared across all clients
+- `alias`: client-local convenience label
 
 ## Concrete Implementation Plan
 
 ### Runtime Changes
 
-#### 1. Extend host config schema for reusable session setups
+#### 1. Host config schema — `LaunchRecord` replacing `SessionSetupRecord`
 
-Add to `HostIdentity`:
+`HostIdentity` now contains:
 
-- `std::vector<SessionSetupRecord> session_setups`
+- `std::vector<LaunchRecord> launch_records`
+- `std::size_t max_launch_records` (default 50)
 
-Add a new model in `vibe/store` or `vibe/session`:
+`LaunchRecord` fields: `record_id`, `provider`, `workspace_root`, `title`, `launched_at_unix_ms`, `conversation_id`, `group_tags`, `command_argv`, `command_shell`.
 
-- `SessionSetupRecord`
-- `SessionLaunchOverride`
+No `name` field. No manual save semantics.
 
-Update:
+JSON persistence: `launchRecords` array, `maxLaunchRecords` integer. Old `sessionSetups` key silently ignored on load (backward compat).
 
-- JSON parsing and persistence in `file_stores.cpp`
-- tests for round-trip and backward-compatible loading
+#### 2. Create-session request parsing
 
-Compatibility:
+`CreateSessionRequestPayload` uses `record_id` (not `setup_id`). No `save_setup` or `setup_name`.
 
-- missing `sessionSetups` must load as empty
-- existing `host_identity.json` remains valid
+`command` array remains a compatibility alias for `commandArgv`.
 
-#### 2. Extend create-session request parsing additively
+`ParseHostSessionSetupRequest` has been removed.
 
-Keep current fields working.
+#### 3. Auto-save on session create
 
-Add support for:
+`HandleCreateSessionRequest` calls `AutoSaveLaunchRecord` after a successful `CreateSession`. This:
 
-- `setupId`
-- `setupName`
-- `saveSetup`
-- additive launch fields:
-  - `commandArgv`
-  - `commandShell`
-  - or a backward-compatible interpretation of current `command` as `commandArgv`
+1. Builds a `LaunchRecord` from the resolved request inputs
+2. Prepends it to `launch_records` (most-recent-first)
+3. Trims to `max_launch_records`
+4. Saves the updated identity
 
-Recommended request parser behavior:
+No manual POST endpoint for creating records.
 
-- preserve current `command` array as compatibility alias for `commandArgv`
-- reject requests that specify conflicting launch forms at once
-- normalize reused tags the same way current request parsing does
+#### 4. Shell-command launch support
 
-#### 3. Add runtime session-setup resolution
+`commandShell` is already accepted in the create-session request and stored in `LaunchRecord`. The runtime executes `/bin/sh -lc <command>` for shell-mode launches (wired through `LaunchSpec`).
 
-Create a runtime seam that resolves final launch inputs in this order:
+#### 5. Host launch-record APIs
 
-1. start from direct create request or referenced setup
-2. apply explicit request overrides
-3. if no explicit command override remains, apply host provider command override
-4. build final `LaunchSpec`
+- `GET /host/records` — returns the bounded launch-record list
+- `DELETE /host/records/{recordId}` — removes a specific record
 
-This logic should live outside `http_shared.cpp` so it can be reused by CLI and tests cleanly.
+No `POST /host/records`. Records are created only via session create.
 
-Likely seam:
+Legacy paths `GET /host/setups` and `POST /host/setups` are removed. Clients must use `/host/records`.
 
-- `ResolveSessionLaunchInputs(create_request, host_identity)`
+#### 6. CLI host-config commands
 
-#### 4. Add shell-command launch support
+New commands added:
 
-Add a launch mode for shell expansion, implemented explicitly by runtime rather than by clients.
-
-Suggested implementation:
-
-- for `commandShell`, launch `/bin/sh -lc <command>` on POSIX
-- set `LaunchSpec.provider` from requested provider even when executable becomes `/bin/sh`
-- treat shell mode as an explicit override distinct from provider-default/argv mode
-
-This is the minimal additive way to support:
-
-- `codex "$(cat prompt.md)"`
-
-without requiring every client to implement shell parsing/escaping.
-
-#### 5. Add host setup APIs
-
-Additive admin/config routes:
-
-- `GET /host/setups`
-- `POST /host/setups`
-- `PATCH /host/setups/{setupId}` or `PUT`
-- `DELETE /host/setups/{setupId}`
-
-Keep `POST /sessions` as the only session creation route.
-
-Optional fast-follow:
-
-- `POST /sessions` with `saveSetup`
-- `POST /sessions/from-setup` is not required and would be redundant
-
-#### 6. Add CLI host-config commands
-
-Add runtime CLI commands for host-owned config that currently has no CLI mutation path.
-
-Suggested commands:
-
-- `sentrits host status`
 - `sentrits host set-name <display-name>`
-- `sentrits host set-provider-command --provider <provider> -- <command...>`
-- `sentrits host clear-provider-command --provider <provider>`
-- `sentrits host setup list`
-- `sentrits host setup save ...`
-- `sentrits host setup delete <setup-id>`
+- `sentrits host set-provider-command --provider codex|claude -- <command> [args...]`
+- `sentrits host clear-provider-command --provider codex|claude`
+- `sentrits records list [--json]`
+- `sentrits records show [--json] <record-id>`
 
-These should use existing local-admin/config APIs rather than bypassing the daemon store.
+Removed: `sentrits setup list`, `sentrits setup show`.
 
-#### 7. Upgrade `sentrits session start`
+#### 7. `sentrits session start` flags
 
-Add:
+Available:
 
-- `--provider`
-- `--workspace-root`
-- `--conversation-id`
-- `--group-tag`
-- `--command-argv ...` or `--` passthrough pattern
-- `--shell-command "<string>"`
-- `--from-setup <setup-id>`
-- `--save-setup`
-- `--setup-name <name>`
+- `--provider codex|claude`
+- `--workspace PATH`
+- `--title TITLE`
+- `--record RECORD_ID` (relaunch from a previous record as defaults)
+- `--shell-command COMMAND`
+- `--attach`
 
-Minimum compatibility rule:
-
-- existing `sentrits session start [--title TITLE] [--attach]` behavior must still work
-
-#### 8. Tests
-
-Add or update tests for:
-
-- host config round-trip with setup records
-- create request parsing for setup and launch-mode fields
-- precedence rules between setup, provider default override, explicit argv, and explicit shell command
-- `commandShell` launching via `/bin/sh -lc`
-- compatibility with existing `command` array requests
-- host name mutation through CLI/API
+No `--save-setup` or `--setup-name`. Records are auto-saved.
 
 ### API Changes
 
-Keep existing fields valid and additive.
+`POST /sessions`:
 
-Recommended `POST /sessions` evolution:
+- continue accepting: `provider`, `workspaceRoot`, `title`, `conversationId`, `command` (compat alias), `groupTags`, `commandArgv`, `commandShell`
+- add: `recordId` (optional relaunch reference)
+- remove: `setupId`, `saveSetup`, `setupName`
 
-- continue accepting:
-  - `provider`
-  - `workspaceRoot`
-  - `title`
-  - `conversationId`
-  - `command` as compatibility alias
-  - `groupTags`
-- add:
-  - `setupId`
-  - `setupName`
-  - `saveSetup`
-  - `commandArgv`
-  - `commandShell`
+`GET /host/info`:
 
-Recommended `GET /host/info` evolution:
+- `sessionSetupCount` replaced by `launchRecordCount`
+- `capabilities` includes `launchRecords` instead of `sessionSetups`
 
-- keep current fields
-- optionally add summarized setup capabilities rather than full setup list
+New record endpoints:
 
-Example additions:
+- `GET /host/records`
+- `DELETE /host/records/{recordId}`
 
-- `capabilities` includes `sessionSetups`
-- `sessionSetupCount`
-
-Full setup content should come from dedicated host setup endpoints, not `host/info`.
+Removed endpoints: `GET /host/setups`, `POST /host/setups`, `DELETE /host/setups/{setupId}`.
 
 ### Web Changes
 

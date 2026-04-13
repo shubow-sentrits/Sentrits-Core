@@ -62,19 +62,8 @@ struct CreateSessionRequestPayload {
   std::optional<std::vector<std::string>> command_argv;
   std::optional<std::string> command_shell;
   std::optional<std::vector<std::string>> group_tags;
-  std::optional<std::string> setup_id;
-};
-
-struct HostSessionSetupPayload {
-  std::optional<std::string> setup_id;
-  std::string name;
-  vibe::session::ProviderType provider{vibe::session::ProviderType::Codex};
-  std::string workspace_root;
-  std::string title;
-  std::optional<std::string> conversation_id;
-  std::vector<std::string> group_tags;
-  std::optional<std::vector<std::string>> command_argv;
-  std::optional<std::string> command_shell;
+  // Reference a previously auto-saved launch record as a starting point.
+  std::optional<std::string> record_id;
 };
 
 struct SessionGroupTagsUpdatePayload {
@@ -95,8 +84,6 @@ using WebSocketCommand =
 [[nodiscard]] auto ParsePairingClaimRequest(const std::string& body)
     -> std::optional<PairingClaimPayload>;
 [[nodiscard]] auto ParseHostConfigRequest(const std::string& body) -> std::optional<HostConfigPayload>;
-[[nodiscard]] auto ParseHostSessionSetupRequest(const std::string& body)
-    -> std::optional<HostSessionSetupPayload>;
 [[nodiscard]] auto ParseSessionGroupTagsUpdateRequest(const std::string& body)
     -> std::optional<SessionGroupTagsUpdatePayload>;
 [[nodiscard]] auto ParseWebSocketCommand(const std::string& body) -> std::optional<WebSocketCommand>;

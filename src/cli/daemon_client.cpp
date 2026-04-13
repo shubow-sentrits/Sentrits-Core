@@ -507,8 +507,8 @@ auto BuildCreateSessionRequestBody(const CreateSessionRequest& request) -> std::
   if (request.title.has_value()) {
     object["title"] = *request.title;
   }
-  if (request.setup_id.has_value()) {
-    object["setupId"] = *request.setup_id;
+  if (request.record_id.has_value()) {
+    object["recordId"] = *request.record_id;
   }
   if (request.command_argv.has_value()) {
     json::array command;
@@ -583,51 +583,54 @@ auto ParseSessionList(const std::string& body) -> std::vector<ListedSession> {
   return sessions;
 }
 
-auto ParseSetupList(const std::string& body) -> std::vector<ListedSetup> {
+auto ParseRecordList(const std::string& body) -> std::vector<ListedRecord> {
   boost::system::error_code error_code;
   const json::value parsed = json::parse(body, error_code);
   if (error_code || !parsed.is_array()) {
     return {};
   }
 
-  std::vector<ListedSetup> setups;
+  std::vector<ListedRecord> records;
   for (const auto& value : parsed.as_array()) {
     if (!value.is_object()) {
       continue;
     }
     const auto& object = value.as_object();
-    const auto setup_id = object.if_contains("setupId");
-    const auto name = object.if_contains("name");
+    const auto record_id = object.if_contains("recordId");
     const auto provider = object.if_contains("provider");
     const auto workspace_root = object.if_contains("workspaceRoot");
     const auto title = object.if_contains("title");
-    if (setup_id == nullptr || name == nullptr || provider == nullptr ||
+    if (record_id == nullptr || provider == nullptr ||
         workspace_root == nullptr || title == nullptr ||
-        !setup_id->is_string() || !name->is_string() || !provider->is_string() ||
+        !record_id->is_string() || !provider->is_string() ||
         !workspace_root->is_string() || !title->is_string()) {
       continue;
     }
 
-    ListedSetup setup{
-        .setup_id = json::value_to<std::string>(*setup_id),
-        .name = json::value_to<std::string>(*name),
+    ListedRecord record{
+        .record_id = json::value_to<std::string>(*record_id),
         .provider = json::value_to<std::string>(*provider),
         .workspace_root = json::value_to<std::string>(*workspace_root),
         .title = json::value_to<std::string>(*title),
+        .launched_at_unix_ms = 0,
         .conversation_id = std::nullopt,
         .group_tags = {},
         .command_argv = std::nullopt,
         .command_shell = std::nullopt,
     };
+    if (const auto launched_at = object.if_contains("launchedAtUnixMs");
+        launched_at != nullptr && launched_at->is_int64()) {
+      record.launched_at_unix_ms = launched_at->as_int64();
+    }
     if (const auto conversation_id = object.if_contains("conversationId");
         conversation_id != nullptr && conversation_id->is_string()) {
-      setup.conversation_id = json::value_to<std::string>(*conversation_id);
+      record.conversation_id = json::value_to<std::string>(*conversation_id);
     }
     if (const auto group_tags = object.if_contains("groupTags");
         group_tags != nullptr && group_tags->is_array()) {
       for (const auto& tag : group_tags->as_array()) {
         if (tag.is_string()) {
-          setup.group_tags.push_back(json::value_to<std::string>(tag));
+          record.group_tags.push_back(json::value_to<std::string>(tag));
         }
       }
     }
@@ -642,17 +645,17 @@ auto ParseSetupList(const std::string& body) -> std::vector<ListedSetup> {
         tokens.push_back(json::value_to<std::string>(token));
       }
       if (!tokens.empty()) {
-        setup.command_argv = std::move(tokens);
+        record.command_argv = std::move(tokens);
       }
     }
     if (const auto command_shell = object.if_contains("commandShell");
         command_shell != nullptr && command_shell->is_string()) {
-      setup.command_shell = json::value_to<std::string>(*command_shell);
+      record.command_shell = json::value_to<std::string>(*command_shell);
     }
-    setups.push_back(std::move(setup));
+    records.push_back(std::move(record));
   }
 
-  return setups;
+  return records;
 }
 
 auto BuildControlRequestCommand(const vibe::session::ControllerKind controller_kind) -> std::string {
@@ -747,12 +750,22 @@ auto GetHostInfo(const DaemonEndpoint& endpoint) -> std::optional<std::string> {
   return response->body();
 }
 
-auto ListSetups(const DaemonEndpoint& endpoint) -> std::optional<std::vector<ListedSetup>> {
-  const auto response = PerformHttpRequest(endpoint, http::verb::get, "/host/setups");
+auto ListRecords(const DaemonEndpoint& endpoint) -> std::optional<std::vector<ListedRecord>> {
+  const auto response = PerformHttpRequest(endpoint, http::verb::get, "/host/records");
   if (!response.has_value() || response->result() != http::status::ok) {
     return std::nullopt;
   }
-  return ParseSetupList(response->body());
+  return ParseRecordList(response->body());
+}
+
+auto PostHostConfig(const DaemonEndpoint& endpoint, const std::string& body)
+    -> std::optional<std::string> {
+  const auto response =
+      PerformHttpRequest(endpoint, http::verb::post, "/host/config", body, "application/json");
+  if (!response.has_value() || response->result() != http::status::ok) {
+    return std::nullopt;
+  }
+  return response->body();
 }
 
 auto AttachSessionLocal(const std::string& session_id) -> int {

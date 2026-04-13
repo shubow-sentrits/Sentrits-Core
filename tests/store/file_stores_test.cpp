@@ -49,20 +49,21 @@ TEST_F(FileStoresTest, HostIdentityRoundTripsAcrossReload) {
               .executable = "/opt/bin/claude",
               .args = {"--print"},
           },
-      .session_setups =
+      .launch_records =
           {
-              SessionSetupRecord{
-                  .setup_id = "setup_prompt",
-                  .name = "Prompt Setup",
+              LaunchRecord{
+                  .record_id = "rec_prompt",
                   .provider = vibe::session::ProviderType::Codex,
                   .workspace_root = "/tmp/project",
                   .title = "prompt-session",
+                  .launched_at_unix_ms = 1700000000000LL,
                   .conversation_id = std::nullopt,
                   .group_tags = {"frontend"},
                   .command_argv = std::nullopt,
                   .command_shell = std::string("codex \"$(cat prompt.md)\""),
               },
           },
+      .max_launch_records = kDefaultMaxLaunchRecords,
   };
 
   {
@@ -92,7 +93,7 @@ TEST_F(FileStoresTest, HostIdentityLoadsLegacyFilesWithDefaultListenerSettings) 
   EXPECT_EQ(loaded->remote_port, kDefaultRemotePort);
   EXPECT_TRUE(loaded->codex_command.executable.empty());
   EXPECT_TRUE(loaded->claude_command.executable.empty());
-  EXPECT_TRUE(loaded->session_setups.empty());
+  EXPECT_TRUE(loaded->launch_records.empty());
 }
 
 TEST_F(FileStoresTest, EnsureHostIdentityGeneratesAndPersistsStableHostId) {
@@ -133,7 +134,7 @@ TEST_F(FileStoresTest, EnsureHostIdentityPreservesExistingConfiguredFields) {
               .executable = "/opt/bin/claude",
               .args = {"--verbose"},
           },
-      .session_setups = {},
+      .launch_records = {},
   };
   ASSERT_TRUE(store.SaveHostIdentity(expected));
 

@@ -16,7 +16,7 @@ TEST(DaemonClientTest, BuildsCreateSessionRequestBody) {
       .provider = vibe::session::ProviderType::Codex,
       .workspace_root = "/tmp/project",
       .title = "demo",
-      .setup_id = std::nullopt,
+      .record_id = std::nullopt,
       .command_argv = std::nullopt,
       .command_shell = std::nullopt,
   });
@@ -26,17 +26,17 @@ TEST(DaemonClientTest, BuildsCreateSessionRequestBody) {
   EXPECT_NE(body.find("\"title\":\"demo\""), std::string::npos);
 }
 
-TEST(DaemonClientTest, BuildsCreateSessionRequestBodyWithSetupAndShellCommand) {
+TEST(DaemonClientTest, BuildsCreateSessionRequestBodyWithRecordIdAndShellCommand) {
   const std::string body = BuildCreateSessionRequestBody(CreateSessionRequest{
       .provider = std::nullopt,
       .workspace_root = "/tmp/project",
       .title = "demo",
-      .setup_id = "setup_1",
+      .record_id = "rec_1",
       .command_argv = std::nullopt,
       .command_shell = "codex \"$(cat prompt.md)\"",
   });
 
-  EXPECT_NE(body.find("\"setupId\":\"setup_1\""), std::string::npos);
+  EXPECT_NE(body.find("\"recordId\":\"rec_1\""), std::string::npos);
   EXPECT_NE(body.find("\"commandShell\":\"codex \\\"$(cat prompt.md)\\\"\""), std::string::npos);
   EXPECT_EQ(body.find("\"provider\":"), std::string::npos);
 }
@@ -73,19 +73,19 @@ TEST(DaemonClientTest, ParsesSessionListWithAdditiveNodeSummaryFields) {
   EXPECT_EQ(sessions[0].semantic_preview, "Workspace dirty");
 }
 
-TEST(DaemonClientTest, ParsesSetupList) {
-  const auto setups = ParseSetupList(
-      R"([{"setupId":"setup_1","name":"Prompt Setup","provider":"codex","workspaceRoot":".","title":"prompt","conversationId":"conv-1","groupTags":["frontend"],"commandShell":"codex \"$(cat prompt.md)\""},{"setupId":"setup_2","name":"Shell","provider":"claude","workspaceRoot":"/tmp","title":"ops","commandArgv":["/bin/bash","-l"]}])");
+TEST(DaemonClientTest, ParsesRecordList) {
+  const auto records = ParseRecordList(
+      R"([{"recordId":"rec_1","provider":"codex","workspaceRoot":".","title":"prompt","launchedAtUnixMs":1700000000000,"conversationId":"conv-1","groupTags":["frontend"],"commandShell":"codex \"$(cat prompt.md)\""},{"recordId":"rec_2","provider":"claude","workspaceRoot":"/tmp","title":"ops","launchedAtUnixMs":1700000001000,"commandArgv":["/bin/bash","-l"]}])");
 
-  ASSERT_EQ(setups.size(), 2U);
-  EXPECT_EQ(setups[0].setup_id, "setup_1");
-  EXPECT_EQ(setups[0].name, "Prompt Setup");
-  ASSERT_TRUE(setups[0].conversation_id.has_value());
-  EXPECT_EQ(*setups[0].conversation_id, "conv-1");
-  ASSERT_TRUE(setups[0].command_shell.has_value());
-  EXPECT_EQ(*setups[0].command_shell, "codex \"$(cat prompt.md)\"");
-  ASSERT_TRUE(setups[1].command_argv.has_value());
-  EXPECT_EQ(*setups[1].command_argv, (std::vector<std::string>{"/bin/bash", "-l"}));
+  ASSERT_EQ(records.size(), 2U);
+  EXPECT_EQ(records[0].record_id, "rec_1");
+  EXPECT_EQ(records[0].launched_at_unix_ms, 1700000000000LL);
+  ASSERT_TRUE(records[0].conversation_id.has_value());
+  EXPECT_EQ(*records[0].conversation_id, "conv-1");
+  ASSERT_TRUE(records[0].command_shell.has_value());
+  EXPECT_EQ(*records[0].command_shell, "codex \"$(cat prompt.md)\"");
+  ASSERT_TRUE(records[1].command_argv.has_value());
+  EXPECT_EQ(*records[1].command_argv, (std::vector<std::string>{"/bin/bash", "-l"}));
 }
 
 TEST(DaemonClientTest, BuildsControlAndTerminalCommands) {
@@ -125,7 +125,7 @@ TEST(DaemonClientTest, ReturnsNulloptWhenDaemonIsUnavailable) {
             .provider = vibe::session::ProviderType::Codex,
             .workspace_root = "/tmp/project",
             .title = "demo",
-            .setup_id = std::nullopt,
+            .record_id = std::nullopt,
             .command_argv = std::nullopt,
             .command_shell = std::nullopt,
         });
