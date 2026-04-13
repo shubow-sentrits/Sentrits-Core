@@ -13,6 +13,7 @@ Behavior:
 - traces are compiled out when `NDEBUG` is defined
 - in non-`Release` builds, traces are emitted only when `SENTRITS_DEBUG_TRACE` is enabled
 - traces go to `stderr`
+- `SENTRITS_SESSION_SIGNAL_TRACE_PATH` writes session-node transition records to a file and also enables `core.node.summary.transition` tracing even if `SENTRITS_DEBUG_TRACE` is unset
 
 Enable tracing for a local debug run:
 
@@ -24,6 +25,20 @@ Disable explicitly:
 
 ```bash
 SENTRITS_DEBUG_TRACE=0 ./build/sentrits serve
+```
+
+Enable only the session-node transition file trace:
+
+```bash
+SENTRITS_SESSION_SIGNAL_TRACE_PATH=/tmp/sentrits-session-signal-trace.log ./build/sentrits serve
+```
+
+Enable both:
+
+```bash
+SENTRITS_DEBUG_TRACE=1 \
+SENTRITS_SESSION_SIGNAL_TRACE_PATH=/tmp/sentrits-session-signal-trace.log \
+./build/sentrits serve
 ```
 
 Important build note:
@@ -45,6 +60,12 @@ Fields:
 - scope
 - event
 - event-specific detail payload
+
+When `SENTRITS_SESSION_SIGNAL_TRACE_PATH` is set, the file output is a simplified line format:
+
+```text
+1776035979553 reason=poll session=s_1 status=Running controller=host interaction=interactive_line_mode ...
+```
 
 ## Current Trace Scopes
 
@@ -98,6 +119,12 @@ Useful CLI checks in another terminal:
 ./build/sentrits session show s_1
 ```
 
+If you want a durable transition log for later comparison, also set:
+
+```bash
+SENTRITS_SESSION_SIGNAL_TRACE_PATH=/tmp/sentrits-session-signal-trace.log
+```
+
 ### Trace Attach / Control Handoff Issues
 
 Use a `Debug` build, then reproduce with tracing enabled:
@@ -122,6 +149,8 @@ This is the right trace set for:
 - observer/control transitions
 - controller-specific terminal capability replies
 - shared terminal appearance changing after control handoff
+
+`SENTRITS_SESSION_SIGNAL_TRACE_PATH` is useful here when you want the coarse session/controller transition stream captured separately from the noisier stderr trace.
 
 ### Trace Snapshot / Bootstrap Problems
 
@@ -220,6 +249,12 @@ For client-related issues, keep the host trace authoritative and align it with:
 
 - web browser console/network logs in `Sentrits-Web`
 - Xcode console logs in `Sentrits-IOS`
+
+When using `SENTRITS_SESSION_SIGNAL_TRACE_PATH`:
+
+- the file is truncated on daemon start
+- it records `core.node.summary.transition` details only
+- it is useful for controller/attention/lifecycle transition timelines, not PTY byte-level debugging
 
 ## Scope Boundary
 
