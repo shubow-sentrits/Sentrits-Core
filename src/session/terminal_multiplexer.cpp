@@ -398,17 +398,17 @@ class TerminalMultiplexer::Impl {
     const std::size_t total_line_count = scrollback_count + snapshot_.visible_lines.size();
     const std::size_t cursor_absolute_row = scrollback_count + snapshot_.cursor_row;
 
+    // Always anchor the viewport to the tail of the terminal buffer.
+    // Vertical cursor-following causes the viewport_top_line to oscillate
+    // when an observer's viewport size differs from the active PTY size:
+    // a screen redraw sweeps the cursor from row 0 down to its final
+    // position, and each intermediate observer snapshot fires at a
+    // different cursor row, producing alternating views. Showing the last
+    // viewport_rows lines of all content is stable and what an observer
+    // expects when watching a live session.
     std::size_t viewport_top_line = 0;
     if (total_line_count > viewport_rows) {
-      const std::size_t max_top_line = total_line_count - viewport_rows;
-      if (state.follow_cursor) {
-        viewport_top_line = cursor_absolute_row + 1U > viewport_rows
-                                ? cursor_absolute_row + 1U - viewport_rows
-                                : 0U;
-      } else {
-        viewport_top_line = max_top_line;
-      }
-      viewport_top_line = std::min(viewport_top_line, max_top_line);
+      viewport_top_line = total_line_count - viewport_rows;
     }
 
     std::size_t horizontal_offset = state.horizontal_offset;
