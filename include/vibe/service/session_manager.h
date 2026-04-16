@@ -108,6 +108,7 @@ class SessionManager {
 
   [[nodiscard]] auto CreateSession(const CreateSessionRequest& request)
       -> std::optional<SessionSummary>;
+  [[nodiscard]] auto last_create_error_message() const -> const std::string&;
   [[nodiscard]] auto LoadPersistedSessions() -> std::size_t;
   [[nodiscard]] auto ListSessions() const -> std::vector<SessionSummary>;
   [[nodiscard]] auto GetSession(const std::string& session_id) const -> std::optional<SessionSummary>;
@@ -180,6 +181,7 @@ class SessionManager {
   PtyProcessFactory pty_process_factory_;
   std::vector<SessionEntry> sessions_;
   int poll_count_{0};
+  std::string last_create_error_message_;
 };
 
 }  // namespace vibe::service

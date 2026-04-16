@@ -561,8 +561,10 @@ auto InferSupervisionState(const vibe::session::SessionStatus status,
 
 auto SessionManager::CreateSession(const CreateSessionRequest& request)
     -> std::optional<SessionSummary> {
+  last_create_error_message_.clear();
   const auto session_id = MakeSessionId();
   if (!session_id.has_value()) {
+    last_create_error_message_ = "failed to allocate session id";
     return std::nullopt;
   }
 
@@ -600,6 +602,7 @@ auto SessionManager::CreateSession(const CreateSessionRequest& request)
 
   auto process = pty_process_factory_ ? pty_process_factory_() : nullptr;
   if (process == nullptr) {
+    last_create_error_message_ = "pty process unavailable";
     return std::nullopt;
   }
 
@@ -634,13 +637,31 @@ auto SessionManager::CreateSession(const CreateSessionRequest& request)
 
   SessionEntry& entry = sessions_.back();
   const bool started = entry.runtime->Start();
-  static_cast<void>(started);
+  if (!started) {
+    last_create_error_message_ =
+        entry.runtime->start_error().value_or("failed to start session process");
+    vibe::base::DebugTrace("core.session", "create.failed",
+                           "session=" + session_id->value() + " provider=" +
+                               std::string(vibe::session::ToString(request.provider)) + " workspace=" +
+                               request.workspace_root + " detail=" + last_create_error_message_);
+    PersistEntry(entry);
+    MaybeTraceNodeSummaryTransition(entry, "create_failed");
+    sessions_.pop_back();
+    if (session_store_ != nullptr) {
+      static_cast<void>(session_store_->RemoveSessionRecord(session_id->value()));
+    }
+    return std::nullopt;
+  }
   entry.last_observed_status = entry.runtime->record().metadata().status;
   entry.last_observed_sequence = entry.runtime->record().snapshot().current_sequence;
 
   PersistEntry(entry);
   MaybeTraceNodeSummaryTransition(entry, "create");
   return BuildSummary(entry);
+}
+
+auto SessionManager::last_create_error_message() const -> const std::string& {
+  return last_create_error_message_;
 }
 
 auto SessionManager::LoadPersistedSessions() -> std::size_t {

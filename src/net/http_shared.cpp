@@ -992,8 +992,12 @@ auto HandleCreateSessionRequest(const HttpRequest& request, vibe::service::Sessi
 
   const auto created = session_manager.CreateSession(*resolved_request);
   if (!created.has_value()) {
-    return MakeJsonResponse(request, http::status::internal_server_error,
-                            "{\"error\":\"failed to create session\"}");
+    json::object error;
+    error["error"] = "failed to create session";
+    if (!session_manager.last_create_error_message().empty()) {
+      error["detail"] = session_manager.last_create_error_message();
+    }
+    return MakeJsonResponse(request, http::status::internal_server_error, json::serialize(error));
   }
 
   AutoSaveLaunchRecord(*resolved_request, context.host_config_store);

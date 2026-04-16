@@ -343,6 +343,40 @@ TEST(SessionManagerTest, CreateSessionFailsWhenPtyFactoryCannotProvideProcess) {
   });
 
   EXPECT_FALSE(created.has_value());
+  EXPECT_EQ(manager.last_create_error_message(), "pty process unavailable");
+}
+
+TEST(SessionManagerTest, CreateSessionSurfacesPtyStartFailureDetail) {
+  SessionManager manager(nullptr, []() -> std::unique_ptr<vibe::session::IPtyProcess> {
+    class FailingStartPtyProcess final : public vibe::session::IPtyProcess {
+     public:
+      [[nodiscard]] auto Start(const vibe::session::LaunchSpec&) -> vibe::session::StartResult override {
+        return {.started = false, .pid = 0, .error_message = "execvp claude: No such file or directory"};
+      }
+
+      [[nodiscard]] auto Write(std::string_view) -> bool override { return false; }
+      [[nodiscard]] auto Read(int) -> vibe::session::ReadResult override { return {}; }
+      [[nodiscard]] auto ReadableFd() const -> std::optional<int> override { return std::nullopt; }
+      [[nodiscard]] auto Resize(vibe::session::TerminalSize) -> bool override { return false; }
+      [[nodiscard]] auto PollExit() -> std::optional<int> override { return std::nullopt; }
+      [[nodiscard]] auto Terminate() -> bool override { return false; }
+    };
+
+    return std::make_unique<FailingStartPtyProcess>();
+  });
+
+  const auto created = manager.CreateSession(CreateSessionRequest{
+      .provider = vibe::session::ProviderType::Claude,
+      .workspace_root = ".",
+      .title = "missing-claude",
+      .conversation_id = std::nullopt,
+      .command_argv = std::vector<std::string>{"claude"},
+      .group_tags = {},
+  });
+
+  EXPECT_FALSE(created.has_value());
+  EXPECT_EQ(manager.last_create_error_message(), "execvp claude: No such file or directory");
+  EXPECT_TRUE(manager.ListSessions().empty());
 }
 
 TEST(SessionManagerTest, ShutdownTerminatesLiveSessionsClearsControlAndPersistsExitedState) {
