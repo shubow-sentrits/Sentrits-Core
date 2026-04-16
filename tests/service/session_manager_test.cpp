@@ -239,7 +239,7 @@ TEST(SessionManagerTest, CreateSessionNormalizesAndPersistsGroupTags) {
       .title = "tagged",
       .conversation_id = std::nullopt,
       .command_argv = std::nullopt,
-      .command_shell = std::nullopt,
+      .command_shell = std::string("sleep 30"),
       .group_tags = {" Frontend ", "mvp", "frontend"},
   });
   ASSERT_TRUE(created.has_value());
@@ -294,7 +294,7 @@ TEST(SessionManagerTest, UpdatesGroupTagsForLiveAndRecoveredSessions) {
       .title = "live-tagged",
       .conversation_id = std::nullopt,
       .command_argv = std::nullopt,
-      .command_shell = std::nullopt,
+      .command_shell = std::string("sleep 30"),
       .group_tags = {"frontend"},
   });
   ASSERT_TRUE(live.has_value());

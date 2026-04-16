@@ -409,7 +409,7 @@ TEST(HttpSharedTest, CanCreateAndListSessions) {
   create_request.version(11);
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\",\"groupTags\":[\" Frontend \",\"mvp\",\"frontend\"]}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\",\"groupTags\":[\" Frontend \",\"mvp\",\"frontend\"],\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
 
   const HttpResponse create_response =
@@ -444,7 +444,7 @@ TEST(HttpSharedTest, AdminLocalCanCreateSessionWithoutBearerToken) {
   create_request.target("/sessions");
   create_request.version(11);
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"local-admin\"}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"local-admin\",\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
 
   const HttpResponse create_response = HandleRequest(
@@ -467,7 +467,7 @@ TEST(HttpSharedTest, ReturnsSessionDetailAndSnapshot) {
   create_request.version(11);
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\",\"groupTags\":[\"frontend\"]}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\",\"groupTags\":[\"frontend\"],\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
   const HttpResponse create_response =
       HandleRequest(create_request, session_manager,
@@ -511,7 +511,7 @@ TEST(HttpSharedTest, MutatesSessionGroupTagsAndReadsBackNormalizedTags) {
   create_request.version(11);
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"tag-target\",\"groupTags\":[\"frontend\"]}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"tag-target\",\"groupTags\":[\"frontend\"],\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
   EXPECT_EQ(HandleRequest(create_request, session_manager,
                           MakeAuthContext(authorizer, pairing_service, host_config_store))
@@ -556,7 +556,7 @@ TEST(HttpSharedTest, RejectsInvalidSessionGroupTagsMutationRequest) {
   create_request.version(11);
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"tag-target\"}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"tag-target\",\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
   EXPECT_EQ(HandleRequest(create_request, session_manager,
                           MakeAuthContext(authorizer, pairing_service, host_config_store))
@@ -740,7 +740,7 @@ TEST(HttpSharedTest, CanFetchTailForExistingSession) {
   create_request.version(11);
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\"}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\",\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
   const HttpResponse create_response =
       HandleRequest(create_request, session_manager,
@@ -772,7 +772,7 @@ TEST(HttpSharedTest, RejectsMalformedTailByteLimit) {
   create_request.version(11);
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\"}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\",\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
   const HttpResponse create_response =
       HandleRequest(create_request, session_manager,
@@ -818,7 +818,7 @@ TEST(HttpSharedTest, StopIsIdempotentForExitedSession) {
   create_request.version(11);
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() =
-      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\"}";
+      "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"new-session\",\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
   const HttpResponse create_response =
       HandleRequest(create_request, session_manager,
@@ -1325,7 +1325,7 @@ TEST(HttpSharedTest, ServesHostTrustedDeviceRoutesAndLocalSessionCreation) {
   create_request.target("/host/sessions");
   create_request.version(11);
   create_request.body() =
-      R"({"provider":"codex","workspaceRoot":".","title":"local-host-ui","conversationId":"conv_hash"})";
+      R"({"provider":"codex","workspaceRoot":".","title":"local-host-ui","conversationId":"conv_hash","commandShell":"sleep 30"})";
   create_request.prepare_payload();
   const HttpResponse create_response =
       HandleRequest(create_request, session_manager,
@@ -1362,7 +1362,7 @@ TEST(HttpSharedTest, RemoteAuthorizedClientCanClearInactiveSessions) {
           .title = "ended",
           .conversation_id = std::nullopt,
           .command_argv = std::nullopt,
-          .command_shell = std::nullopt,
+          .command_shell = std::string("sleep 30"),
           .group_tags = {},
       });
   ASSERT_TRUE(created.has_value());
