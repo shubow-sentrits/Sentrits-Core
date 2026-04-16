@@ -496,13 +496,30 @@ auto HandleServerMessage(const std::string& payload,
 
 }  // namespace
 
-auto BuildCreateSessionRequestBody(const vibe::session::ProviderType provider,
-                                   const std::string& workspace_root,
-                                   const std::string& title) -> std::string {
+auto BuildCreateSessionRequestBody(const CreateSessionRequest& request) -> std::string {
   json::object object;
-  object["provider"] = std::string(vibe::session::ToString(provider));
-  object["workspaceRoot"] = workspace_root;
-  object["title"] = title;
+  if (request.provider.has_value()) {
+    object["provider"] = std::string(vibe::session::ToString(*request.provider));
+  }
+  if (request.workspace_root.has_value()) {
+    object["workspaceRoot"] = *request.workspace_root;
+  }
+  if (request.title.has_value()) {
+    object["title"] = *request.title;
+  }
+  if (request.record_id.has_value()) {
+    object["recordId"] = *request.record_id;
+  }
+  if (request.command_argv.has_value()) {
+    json::array command;
+    for (const auto& token : *request.command_argv) {
+      command.push_back(json::value(token));
+    }
+    object["commandArgv"] = std::move(command);
+  }
+  if (request.command_shell.has_value()) {
+    object["commandShell"] = *request.command_shell;
+  }
   return json::serialize(object);
 }
 
@@ -566,6 +583,81 @@ auto ParseSessionList(const std::string& body) -> std::vector<ListedSession> {
   return sessions;
 }
 
+auto ParseRecordList(const std::string& body) -> std::vector<ListedRecord> {
+  boost::system::error_code error_code;
+  const json::value parsed = json::parse(body, error_code);
+  if (error_code || !parsed.is_array()) {
+    return {};
+  }
+
+  std::vector<ListedRecord> records;
+  for (const auto& value : parsed.as_array()) {
+    if (!value.is_object()) {
+      continue;
+    }
+    const auto& object = value.as_object();
+    const auto record_id = object.if_contains("recordId");
+    const auto provider = object.if_contains("provider");
+    const auto workspace_root = object.if_contains("workspaceRoot");
+    const auto title = object.if_contains("title");
+    if (record_id == nullptr || provider == nullptr ||
+        workspace_root == nullptr || title == nullptr ||
+        !record_id->is_string() || !provider->is_string() ||
+        !workspace_root->is_string() || !title->is_string()) {
+      continue;
+    }
+
+    ListedRecord record{
+        .record_id = json::value_to<std::string>(*record_id),
+        .provider = json::value_to<std::string>(*provider),
+        .workspace_root = json::value_to<std::string>(*workspace_root),
+        .title = json::value_to<std::string>(*title),
+        .launched_at_unix_ms = 0,
+        .conversation_id = std::nullopt,
+        .group_tags = {},
+        .command_argv = std::nullopt,
+        .command_shell = std::nullopt,
+    };
+    if (const auto launched_at = object.if_contains("launchedAtUnixMs");
+        launched_at != nullptr && launched_at->is_int64()) {
+      record.launched_at_unix_ms = launched_at->as_int64();
+    }
+    if (const auto conversation_id = object.if_contains("conversationId");
+        conversation_id != nullptr && conversation_id->is_string()) {
+      record.conversation_id = json::value_to<std::string>(*conversation_id);
+    }
+    if (const auto group_tags = object.if_contains("groupTags");
+        group_tags != nullptr && group_tags->is_array()) {
+      for (const auto& tag : group_tags->as_array()) {
+        if (tag.is_string()) {
+          record.group_tags.push_back(json::value_to<std::string>(tag));
+        }
+      }
+    }
+    if (const auto command_argv = object.if_contains("commandArgv");
+        command_argv != nullptr && command_argv->is_array()) {
+      std::vector<std::string> tokens;
+      for (const auto& token : command_argv->as_array()) {
+        if (!token.is_string()) {
+          tokens.clear();
+          break;
+        }
+        tokens.push_back(json::value_to<std::string>(token));
+      }
+      if (!tokens.empty()) {
+        record.command_argv = std::move(tokens);
+      }
+    }
+    if (const auto command_shell = object.if_contains("commandShell");
+        command_shell != nullptr && command_shell->is_string()) {
+      record.command_shell = json::value_to<std::string>(*command_shell);
+    }
+    records.push_back(std::move(record));
+  }
+
+  return records;
+}
+
 auto BuildControlRequestCommand(const vibe::session::ControllerKind controller_kind) -> std::string {
   json::object object;
   object["type"] = "session.control.request";
@@ -594,12 +686,11 @@ auto BuildResizeCommand(const vibe::session::TerminalSize terminal_size) -> std:
   return json::serialize(object);
 }
 
-auto CreateSession(const DaemonEndpoint& endpoint, const vibe::session::ProviderType provider,
-                   const std::string& workspace_root, const std::string& title)
+auto CreateSession(const DaemonEndpoint& endpoint, const CreateSessionRequest& request)
     -> std::optional<std::string> {
   const auto response = PerformHttpRequest(
-      endpoint, http::verb::post, "/sessions",
-      BuildCreateSessionRequestBody(provider, workspace_root, title), "application/json");
+      endpoint, http::verb::post, "/sessions", BuildCreateSessionRequestBody(request),
+      "application/json");
   if (!response.has_value()) {
     return std::nullopt;
   }
@@ -653,6 +744,24 @@ auto ClearInactiveSessions(const DaemonEndpoint& endpoint) -> std::optional<std:
 
 auto GetHostInfo(const DaemonEndpoint& endpoint) -> std::optional<std::string> {
   const auto response = PerformHttpRequest(endpoint, http::verb::get, "/host/info");
+  if (!response.has_value() || response->result() != http::status::ok) {
+    return std::nullopt;
+  }
+  return response->body();
+}
+
+auto ListRecords(const DaemonEndpoint& endpoint) -> std::optional<std::vector<ListedRecord>> {
+  const auto response = PerformHttpRequest(endpoint, http::verb::get, "/host/records");
+  if (!response.has_value() || response->result() != http::status::ok) {
+    return std::nullopt;
+  }
+  return ParseRecordList(response->body());
+}
+
+auto PostHostConfig(const DaemonEndpoint& endpoint, const std::string& body)
+    -> std::optional<std::string> {
+  const auto response =
+      PerformHttpRequest(endpoint, http::verb::post, "/host/config", body, "application/json");
   if (!response.has_value() || response->result() != http::status::ok) {
     return std::nullopt;
   }

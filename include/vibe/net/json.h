@@ -64,6 +64,8 @@ struct ErrorEvent {
 [[nodiscard]] auto ToJson(const SessionInventoryEvent& event) -> std::string;
 [[nodiscard]] auto ToJson(const ErrorEvent& event) -> std::string;
 [[nodiscard]] auto ToJson(const DiscoveryInfo& info) -> std::string;
+[[nodiscard]] auto ToJson(const vibe::store::LaunchRecord& record) -> std::string;
+[[nodiscard]] auto ToJson(const std::vector<vibe::store::LaunchRecord>& records) -> std::string;
 [[nodiscard]] auto ToJsonHostInfo() -> std::string;
 [[nodiscard]] auto ToJsonHostInfo(const std::optional<vibe::store::HostIdentity>& host_identity,
                                   bool tls_enabled) -> std::string;

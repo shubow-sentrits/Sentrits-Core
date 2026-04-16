@@ -21,6 +21,7 @@ class SessionRuntime {
   [[nodiscard]] auto record() const -> const SessionRecord&;
   [[nodiscard]] auto launch_spec() const -> const LaunchSpec&;
   [[nodiscard]] auto pid() const -> std::optional<ProcessId>;
+  [[nodiscard]] auto start_error() const -> const std::optional<std::string>&;
   [[nodiscard]] auto output_buffer() const -> const SessionOutputBuffer&;
   [[nodiscard]] auto readable_fd() const -> std::optional<int>;
   [[nodiscard]] auto viewport_snapshot(std::string_view view_id) const
@@ -49,6 +50,7 @@ class SessionRuntime {
   LaunchSpec launch_spec_;
   IPtyProcess& pty_process_;
   std::optional<ProcessId> pid_;
+  std::optional<std::string> start_error_;
   SessionOutputBuffer output_buffer_;
   TerminalMultiplexer terminal_multiplexer_;
   TerminalDebugRecorder debug_recorder_;

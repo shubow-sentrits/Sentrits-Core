@@ -13,6 +13,7 @@ enum class AuthorizationAction {
   ControlSession,
   ApprovePairing,
   ConfigureHost,
+  ManageHostSetups,
 };
 
 struct RequestContext {

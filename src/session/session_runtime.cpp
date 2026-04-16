@@ -21,6 +21,8 @@ auto SessionRuntime::launch_spec() const -> const LaunchSpec& { return launch_sp
 
 auto SessionRuntime::pid() const -> std::optional<ProcessId> { return pid_; }
 
+auto SessionRuntime::start_error() const -> const std::optional<std::string>& { return start_error_; }
+
 auto SessionRuntime::output_buffer() const -> const SessionOutputBuffer& { return output_buffer_; }
 
 auto SessionRuntime::readable_fd() const -> std::optional<int> { return pty_process_.ReadableFd(); }
@@ -35,8 +37,12 @@ auto SessionRuntime::Start() -> bool {
     return false;
   }
 
+  start_error_.reset();
   const StartResult start_result = pty_process_.Start(launch_spec_);
   if (!start_result.started) {
+    if (!start_result.error_message.empty()) {
+      start_error_ = start_result.error_message;
+    }
     const bool transitioned_to_error = record_.TryTransition(SessionStatus::Error);
     static_cast<void>(transitioned_to_error);
     return false;

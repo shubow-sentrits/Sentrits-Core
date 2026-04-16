@@ -12,12 +12,33 @@ namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 
 TEST(DaemonClientTest, BuildsCreateSessionRequestBody) {
-  const std::string body =
-      BuildCreateSessionRequestBody(vibe::session::ProviderType::Codex, "/tmp/project", "demo");
+  const std::string body = BuildCreateSessionRequestBody(CreateSessionRequest{
+      .provider = vibe::session::ProviderType::Codex,
+      .workspace_root = "/tmp/project",
+      .title = "demo",
+      .record_id = std::nullopt,
+      .command_argv = std::nullopt,
+      .command_shell = std::nullopt,
+  });
 
   EXPECT_NE(body.find("\"provider\":\"codex\""), std::string::npos);
   EXPECT_NE(body.find("\"workspaceRoot\":\"/tmp/project\""), std::string::npos);
   EXPECT_NE(body.find("\"title\":\"demo\""), std::string::npos);
+}
+
+TEST(DaemonClientTest, BuildsCreateSessionRequestBodyWithRecordIdAndShellCommand) {
+  const std::string body = BuildCreateSessionRequestBody(CreateSessionRequest{
+      .provider = std::nullopt,
+      .workspace_root = "/tmp/project",
+      .title = "demo",
+      .record_id = "rec_1",
+      .command_argv = std::nullopt,
+      .command_shell = "codex \"$(cat prompt.md)\"",
+  });
+
+  EXPECT_NE(body.find("\"recordId\":\"rec_1\""), std::string::npos);
+  EXPECT_NE(body.find("\"commandShell\":\"codex \\\"$(cat prompt.md)\\\"\""), std::string::npos);
+  EXPECT_EQ(body.find("\"provider\":"), std::string::npos);
 }
 
 TEST(DaemonClientTest, ParsesCreatedSessionId) {
@@ -52,6 +73,21 @@ TEST(DaemonClientTest, ParsesSessionListWithAdditiveNodeSummaryFields) {
   EXPECT_EQ(sessions[0].semantic_preview, "Workspace dirty");
 }
 
+TEST(DaemonClientTest, ParsesRecordList) {
+  const auto records = ParseRecordList(
+      R"([{"recordId":"rec_1","provider":"codex","workspaceRoot":".","title":"prompt","launchedAtUnixMs":1700000000000,"conversationId":"conv-1","groupTags":["frontend"],"commandShell":"codex \"$(cat prompt.md)\""},{"recordId":"rec_2","provider":"claude","workspaceRoot":"/tmp","title":"ops","launchedAtUnixMs":1700000001000,"commandArgv":["/bin/bash","-l"]}])");
+
+  ASSERT_EQ(records.size(), 2U);
+  EXPECT_EQ(records[0].record_id, "rec_1");
+  EXPECT_EQ(records[0].launched_at_unix_ms, 1700000000000LL);
+  ASSERT_TRUE(records[0].conversation_id.has_value());
+  EXPECT_EQ(*records[0].conversation_id, "conv-1");
+  ASSERT_TRUE(records[0].command_shell.has_value());
+  EXPECT_EQ(*records[0].command_shell, "codex \"$(cat prompt.md)\"");
+  ASSERT_TRUE(records[1].command_argv.has_value());
+  EXPECT_EQ(*records[1].command_argv, (std::vector<std::string>{"/bin/bash", "-l"}));
+}
+
 TEST(DaemonClientTest, BuildsControlAndTerminalCommands) {
   const std::string control = BuildControlRequestCommand(vibe::session::ControllerKind::Host);
   EXPECT_NE(control.find("\"type\":\"session.control.request\""), std::string::npos);
@@ -83,9 +119,16 @@ TEST(DaemonClientTest, ReturnsNulloptWhenDaemonIsUnavailable) {
   acceptor.close();
 
   EXPECT_NO_THROW({
-    const auto session_id =
-        CreateSession(DaemonEndpoint{.host = "127.0.0.1", .port = port},
-                      vibe::session::ProviderType::Codex, "/tmp/project", "demo");
+    const auto session_id = CreateSession(
+        DaemonEndpoint{.host = "127.0.0.1", .port = port},
+        CreateSessionRequest{
+            .provider = vibe::session::ProviderType::Codex,
+            .workspace_root = "/tmp/project",
+            .title = "demo",
+            .record_id = std::nullopt,
+            .command_argv = std::nullopt,
+            .command_shell = std::nullopt,
+        });
     EXPECT_FALSE(session_id.has_value());
   });
 }

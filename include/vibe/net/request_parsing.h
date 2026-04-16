@@ -54,6 +54,18 @@ struct HostConfigPayload {
   std::optional<std::vector<std::string>> claude_command;
 };
 
+struct CreateSessionRequestPayload {
+  std::optional<vibe::session::ProviderType> provider;
+  std::optional<std::string> workspace_root;
+  std::optional<std::string> title;
+  std::optional<std::string> conversation_id;
+  std::optional<std::vector<std::string>> command_argv;
+  std::optional<std::string> command_shell;
+  std::optional<std::vector<std::string>> group_tags;
+  // Reference a previously auto-saved launch record as a starting point.
+  std::optional<std::string> record_id;
+};
+
 struct SessionGroupTagsUpdatePayload {
   vibe::service::SessionGroupTagsUpdateMode mode{vibe::service::SessionGroupTagsUpdateMode::Add};
   std::vector<std::string> tags;
@@ -64,7 +76,7 @@ using WebSocketCommand =
                  WebSocketRequestControlCommand, WebSocketReleaseControlCommand>;
 
 [[nodiscard]] auto ParseCreateSessionRequest(const std::string& body)
-    -> std::optional<vibe::service::CreateSessionRequest>;
+    -> std::optional<CreateSessionRequestPayload>;
 [[nodiscard]] auto ParseInputRequest(const std::string& body) -> std::optional<std::string>;
 [[nodiscard]] auto ParsePairingRequest(const std::string& body) -> std::optional<PairingRequestPayload>;
 [[nodiscard]] auto ParsePairingApprovalRequest(const std::string& body)

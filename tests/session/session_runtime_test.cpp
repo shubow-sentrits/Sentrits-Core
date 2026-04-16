@@ -107,6 +107,8 @@ TEST(SessionRuntimeTest, FailedStartTransitionsToError) {
   EXPECT_FALSE(runtime.Start());
   EXPECT_EQ(runtime.record().metadata().status, SessionStatus::Error);
   EXPECT_FALSE(runtime.pid().has_value());
+  ASSERT_TRUE(runtime.start_error().has_value());
+  EXPECT_EQ(*runtime.start_error(), "launch failed");
 }
 
 TEST(SessionRuntimeTest, InputAndResizeRequireInteractiveState) {

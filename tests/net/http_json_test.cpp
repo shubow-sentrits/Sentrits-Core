@@ -18,7 +18,8 @@ TEST(HttpJsonTest, SerializesHostInfo) {
   EXPECT_NE(json.find("\"remoteHost\":\"0.0.0.0\""), std::string::npos);
   EXPECT_NE(json.find("\"remotePort\":18086"), std::string::npos);
   EXPECT_NE(json.find("\"providerCommands\""), std::string::npos);
-  EXPECT_NE(json.find("\"capabilities\":[\"sessions\",\"rest\",\"websocket\"]"),
+  EXPECT_NE(json.find("\"launchRecordCount\":0"), std::string::npos);
+  EXPECT_NE(json.find("\"capabilities\":[\"sessions\",\"rest\",\"websocket\",\"launchRecords\"]"),
             std::string::npos);
 }
 
