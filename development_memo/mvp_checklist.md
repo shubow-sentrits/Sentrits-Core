@@ -132,5 +132,5 @@ Future semantic-monitoring and session-node work is important, but it should be 
 See:
 
 - `system_architecture.md`
-- `future/session_terminal_multiplexer_and_semantic_runtime.md`
+- `future/agent_session_network_progress.md`
 - `future/session_signal_map.md`
