@@ -100,7 +100,8 @@ TEST(SessionManagerTest, LoadsPersistedSessionsAsRecoveredExitedSessions) {
       .recent_terminal_tail = "restored tail",
   });
 
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   EXPECT_EQ(manager.LoadPersistedSessions(), 1U);
 
@@ -157,7 +158,8 @@ TEST(SessionManagerTest, SkipsInvalidPersistedSessionIds) {
       .recent_terminal_tail = "",
   });
 
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   EXPECT_EQ(manager.LoadPersistedSessions(), 0U);
   EXPECT_TRUE(manager.ListSessions().empty());
@@ -188,7 +190,8 @@ TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdsAcrossRecov
       .recent_terminal_tail = "tail-9",
   });
 
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
   EXPECT_EQ(manager.LoadPersistedSessions(), 2U);
 
   const auto first_created = manager.CreateSession(CreateSessionRequest{
@@ -231,7 +234,8 @@ TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdsAcrossRecov
 
 TEST(SessionManagerTest, CreateSessionNormalizesAndPersistsGroupTags) {
   FakeSessionStore session_store;
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
@@ -256,7 +260,8 @@ TEST(SessionManagerTest, CreateSessionNormalizesAndPersistsGroupTags) {
 
 TEST(SessionManagerTest, CreateSessionSupportsShellCommandLaunchOverride) {
   FakeSessionStore session_store;
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
@@ -382,7 +387,8 @@ TEST(SessionManagerTest, CreateSessionSurfacesPtyStartFailureDetail) {
 
 TEST(SessionManagerTest, ShutdownTerminatesLiveSessionsClearsControlAndPersistsExitedState) {
   FakeSessionStore session_store;
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
@@ -562,7 +568,8 @@ TEST(SessionManagerTest, ControlHandoffUpdatesActivityTimestamp) {
 
 TEST_F(GitSessionManagerTest, GitPollDoesNotAdvanceActivityWithoutGitStateChange) {
   FakeSessionStore session_store;
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
@@ -595,7 +602,8 @@ TEST_F(GitSessionManagerTest, GitPollDoesNotAdvanceActivityWithoutGitStateChange
 
 TEST_F(GitSessionManagerTest, GitPollTracksDirtyAndCleanTransitionsInSummaryAndSnapshot) {
   FakeSessionStore session_store;
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
@@ -680,7 +688,8 @@ TEST(SessionManagerTest, InfersActiveQuietAndStoppedSupervisionStatesConservativ
 
 TEST(SessionManagerTest, StopSetsShortLivedExitedAttention) {
   FakeSessionStore session_store;
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
 
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
@@ -865,7 +874,8 @@ TEST(SessionManagerTest, PollAllTracksRecentWorkspaceFileChangesForLiveSession) 
   }
 
   FakeSessionStore session_store;
-  SessionManager manager(&session_store);
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1));
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
       .workspace_root = temp_root.string(),
@@ -891,11 +901,17 @@ TEST(SessionManagerTest, PollAllTracksRecentWorkspaceFileChangesForLiveSession) 
     file << "notes\n";
   }
 
-  for (int index = 0; index < 20; ++index) {
+  std::optional<vibe::session::SessionSnapshot> snapshot;
+  for (int attempt = 0; attempt < 20; ++attempt) {
     manager.PollAll(0);
+    snapshot = manager.GetSnapshot(created->id.value());
+    if (snapshot.has_value() && snapshot->recent_file_changes ==
+                                    std::vector<std::string>{"notes.txt", "src/main.cpp"}) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
 
-  const auto snapshot = manager.GetSnapshot(created->id.value());
   ASSERT_TRUE(snapshot.has_value());
   EXPECT_EQ(snapshot->recent_file_changes, (std::vector<std::string>{"notes.txt", "src/main.cpp"}));
   EXPECT_EQ(snapshot->signals.recent_file_change_count, 2U);

@@ -2,6 +2,7 @@
 #define VIBE_SERVICE_SESSION_MANAGER_H
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -104,7 +105,9 @@ class SessionManager {
 
   explicit SessionManager(vibe::store::SessionStore* session_store = nullptr,
                           PtyProcessFactory pty_process_factory =
-                              vibe::session::CreatePlatformPtyProcess);
+                              vibe::session::CreatePlatformPtyProcess,
+                          std::chrono::milliseconds git_poll_interval = std::chrono::seconds(10),
+                          std::chrono::milliseconds file_poll_interval = std::chrono::seconds(3));
 
   [[nodiscard]] auto CreateSession(const CreateSessionRequest& request)
       -> std::optional<SessionSummary>;
@@ -182,6 +185,10 @@ class SessionManager {
   std::vector<SessionEntry> sessions_;
   int poll_count_{0};
   std::string last_create_error_message_;
+  std::chrono::milliseconds git_poll_interval_{std::chrono::seconds(10)};
+  std::chrono::milliseconds file_poll_interval_{std::chrono::seconds(3)};
+  std::chrono::steady_clock::time_point last_git_poll_at_{};
+  std::chrono::steady_clock::time_point last_file_poll_at_{};
 };
 
 }  // namespace vibe::service

@@ -92,7 +92,7 @@ class WebSocketTraceLogger {
   std::mutex mutex_;
 };
 
-constexpr auto kMaintenancePollInterval = std::chrono::milliseconds(50);
+constexpr auto kMaintenancePollInterval = std::chrono::seconds(1);
 
 using SslStream = beast::ssl_stream<tcp::socket>;
 

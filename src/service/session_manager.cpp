@@ -539,9 +539,13 @@ auto BuildNodeSummaryTraceKey(const vibe::service::SessionSummary& summary) -> s
 }  // namespace
 
 SessionManager::SessionManager(vibe::store::SessionStore* session_store,
-                               PtyProcessFactory pty_process_factory)
+                               PtyProcessFactory pty_process_factory,
+                               const std::chrono::milliseconds git_poll_interval,
+                               const std::chrono::milliseconds file_poll_interval)
     : session_store_(session_store),
-      pty_process_factory_(std::move(pty_process_factory)) {}
+      pty_process_factory_(std::move(pty_process_factory)),
+      git_poll_interval_(git_poll_interval),
+      file_poll_interval_(file_poll_interval) {}
 
 auto InferSupervisionState(const vibe::session::SessionStatus status,
                            const std::optional<std::int64_t> last_output_at_unix_ms,
@@ -1334,8 +1338,22 @@ auto SessionManager::PollSession(const std::string& session_id, const int read_t
 
 void SessionManager::PollAll(const int read_timeout_ms) {
   poll_count_ += 1;
-  const bool should_poll_git = (poll_count_ % 100 == 0);
-  const bool should_poll_files = (poll_count_ % 20 == 0);
+  const auto now = std::chrono::steady_clock::now();
+  const bool should_poll_git =
+      git_poll_interval_.count() <= 0 ||
+      last_git_poll_at_.time_since_epoch().count() == 0 ||
+      now - last_git_poll_at_ >= git_poll_interval_;
+  const bool should_poll_files =
+      file_poll_interval_.count() <= 0 ||
+      last_file_poll_at_.time_since_epoch().count() == 0 ||
+      now - last_file_poll_at_ >= file_poll_interval_;
+
+  if (should_poll_git) {
+    last_git_poll_at_ = now;
+  }
+  if (should_poll_files) {
+    last_file_poll_at_ = now;
+  }
 
   for (SessionEntry& entry : sessions_) {
     if (entry.runtime == nullptr) {

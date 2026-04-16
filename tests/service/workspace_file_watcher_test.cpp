@@ -35,7 +35,14 @@ TEST(WorkspaceFileWatcherTest, ReportsChangedFilesAfterInitialBaseline) {
     file << "# hello\n";
   }
 
-  const auto changed_files = watcher.PollChangedFiles();
+  std::vector<std::string> changed_files;
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    changed_files = watcher.PollChangedFiles();
+    if (!changed_files.empty()) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
   EXPECT_EQ(changed_files, (std::vector<std::string>{"README.md", "src/main.cpp"}));
 
   std::filesystem::remove_all(temp_root);
