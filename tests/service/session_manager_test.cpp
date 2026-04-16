@@ -371,6 +371,7 @@ TEST(SessionManagerTest, CreateSessionSurfacesPtyStartFailureDetail) {
       .title = "missing-claude",
       .conversation_id = std::nullopt,
       .command_argv = std::vector<std::string>{"claude"},
+      .command_shell = std::nullopt,
       .group_tags = {},
   });
 
