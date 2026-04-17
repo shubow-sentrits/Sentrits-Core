@@ -5,10 +5,12 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <system_error>
 #include <pthread.h>
 #include <signal.h>
 #include <stdexcept>
 #include <string>
+#include <streambuf>
 #include <thread>
 #include <atomic>
 #include <termios.h>
@@ -461,6 +463,211 @@ auto WriteFileWithParents(const std::filesystem::path& path, const std::string& 
   return output.good();
 }
 
+class TeeStreamBuf final : public std::streambuf {
+ public:
+  TeeStreamBuf(std::streambuf* primary, std::streambuf* secondary)
+      : primary_(primary), secondary_(secondary) {}
+
+ protected:
+  auto overflow(int ch) -> int override {
+    if (ch == EOF) {
+      return sync() == 0 ? 0 : EOF;
+    }
+
+    const char character = static_cast<char>(ch);
+    if (!WriteChar(primary_, character) || !WriteChar(secondary_, character)) {
+      return EOF;
+    }
+    return ch;
+  }
+
+  auto sync() -> int override {
+    const bool primary_ok = primary_ == nullptr || primary_->pubsync() == 0;
+    const bool secondary_ok = secondary_ == nullptr || secondary_->pubsync() == 0;
+    return primary_ok && secondary_ok ? 0 : -1;
+  }
+
+ private:
+  static auto WriteChar(std::streambuf* buffer, const char character) -> bool {
+    return buffer == nullptr || buffer->sputc(character) != EOF;
+  }
+
+  std::streambuf* primary_{nullptr};
+  std::streambuf* secondary_{nullptr};
+};
+
+class RotatingFileStreamBuf final : public std::streambuf {
+ public:
+  RotatingFileStreamBuf(std::filesystem::path path, const std::uintmax_t max_bytes,
+                        const std::size_t max_files)
+      : path_(std::move(path)), max_bytes_(max_bytes), max_files_(std::max<std::size_t>(max_files, 1U)) {
+    Open();
+  }
+
+  [[nodiscard]] auto available() const -> bool { return output_.is_open(); }
+
+ protected:
+  auto overflow(int ch) -> int override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (ch == EOF) {
+      return sync() == 0 ? 0 : EOF;
+    }
+
+    const char character = static_cast<char>(ch);
+    return xsputn(&character, 1) == 1 ? ch : EOF;
+  }
+
+  auto xsputn(const char* data, std::streamsize count) -> std::streamsize override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!EnsureOpen() || data == nullptr || count <= 0) {
+      return 0;
+    }
+
+    std::streamsize written_total = 0;
+    while (written_total < count) {
+      if (current_size_ >= max_bytes_ && !Rotate()) {
+        break;
+      }
+
+      const std::uintmax_t remaining_before_rotate =
+          current_size_ < max_bytes_ ? max_bytes_ - current_size_ : 0;
+      const std::streamsize chunk =
+          static_cast<std::streamsize>(std::min<std::uintmax_t>(
+              static_cast<std::uintmax_t>(count - written_total),
+              std::max<std::uintmax_t>(remaining_before_rotate, 1U)));
+
+      output_.write(data + written_total, chunk);
+      if (!output_.good()) {
+        break;
+      }
+
+      written_total += chunk;
+      current_size_ += static_cast<std::uintmax_t>(chunk);
+    }
+
+    return written_total;
+  }
+
+  auto sync() -> int override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return output_.is_open() && output_.flush() ? 0 : -1;
+  }
+
+ private:
+  auto EnsureOpen() -> bool {
+    if (output_.is_open()) {
+      return true;
+    }
+    Open();
+    return output_.is_open();
+  }
+
+  void Open() {
+    std::error_code error;
+    std::filesystem::create_directories(path_.parent_path(), error);
+    if (error) {
+      return;
+    }
+
+    output_.open(path_, std::ios::out | std::ios::app);
+    if (!output_.is_open()) {
+      return;
+    }
+
+    current_size_ = 0;
+    if (std::filesystem::exists(path_, error) && !error) {
+      current_size_ = std::filesystem::file_size(path_, error);
+      if (error) {
+        current_size_ = 0;
+      }
+    }
+  }
+
+  auto Rotate() -> bool {
+    if (output_.is_open()) {
+      output_.flush();
+      output_.close();
+    }
+
+    std::error_code error;
+    const auto oldest_path = RotatedPath(max_files_);
+    std::filesystem::remove(oldest_path, error);
+    error.clear();
+
+    for (std::size_t index = max_files_; index > 1U; --index) {
+      const auto source = RotatedPath(index - 1U);
+      const auto target = RotatedPath(index);
+      if (!std::filesystem::exists(source, error) || error) {
+        error.clear();
+        continue;
+      }
+      std::filesystem::rename(source, target, error);
+      if (error) {
+        return false;
+      }
+    }
+
+    if (std::filesystem::exists(path_, error) && !error) {
+      std::filesystem::rename(path_, RotatedPath(1U), error);
+      if (error) {
+        return false;
+      }
+    }
+
+    current_size_ = 0;
+    Open();
+    return output_.is_open();
+  }
+
+  auto RotatedPath(const std::size_t index) const -> std::filesystem::path {
+    return std::filesystem::path(path_.string() + "." + std::to_string(index));
+  }
+
+  std::filesystem::path path_;
+  std::uintmax_t max_bytes_{0};
+  std::size_t max_files_{1};
+  std::ofstream output_;
+  std::uintmax_t current_size_{0};
+  std::mutex mutex_;
+};
+
+class ScopedServeLogMirror {
+ public:
+  explicit ScopedServeLogMirror(const std::filesystem::path& storage_root) {
+    const auto log_path = vibe::net::DefaultServeLogPath(storage_root);
+    rotating_buf_ =
+        std::make_unique<RotatingFileStreamBuf>(log_path, 5U * 1024U * 1024U, 5U);
+    if (rotating_buf_ == nullptr || !rotating_buf_->available()) {
+      rotating_buf_.reset();
+      return;
+    }
+
+    cout_buf_ = std::make_unique<TeeStreamBuf>(std::cout.rdbuf(), rotating_buf_.get());
+    cerr_buf_ = std::make_unique<TeeStreamBuf>(std::cerr.rdbuf(), rotating_buf_.get());
+    original_cout_ = std::cout.rdbuf(cout_buf_.get());
+    original_cerr_ = std::cerr.rdbuf(cerr_buf_.get());
+  }
+
+  ScopedServeLogMirror(const ScopedServeLogMirror&) = delete;
+  auto operator=(const ScopedServeLogMirror&) -> ScopedServeLogMirror& = delete;
+
+  ~ScopedServeLogMirror() {
+    if (original_cout_ != nullptr) {
+      std::cout.rdbuf(original_cout_);
+    }
+    if (original_cerr_ != nullptr) {
+      std::cerr.rdbuf(original_cerr_);
+    }
+  }
+
+ private:
+  std::unique_ptr<RotatingFileStreamBuf> rotating_buf_;
+  std::unique_ptr<TeeStreamBuf> cout_buf_;
+  std::unique_ptr<TeeStreamBuf> cerr_buf_;
+  std::streambuf* original_cout_{nullptr};
+  std::streambuf* original_cerr_{nullptr};
+};
+
 void PrintServiceUsage() {
   std::cout << "Usage:\n"
             << "  sentrits service install\n"
@@ -850,6 +1057,8 @@ auto main(const int argc, char** argv) -> int {
   }
 
   if (argc >= 2 && std::string(argv[1]) == "serve") {
+    const auto storage_root = vibe::net::DefaultStorageRoot();
+    ScopedServeLogMirror serve_log_mirror(storage_root);
     std::string admin_host = std::string(vibe::store::kDefaultAdminHost);
     std::uint16_t admin_port = vibe::store::kDefaultAdminPort;
     std::string remote_host = std::string(vibe::store::kDefaultRemoteHost);
@@ -920,7 +1129,7 @@ auto main(const int argc, char** argv) -> int {
     }
 
     if (!admin_host_explicit || !admin_port_explicit || !remote_host_explicit || !remote_port_explicit) {
-      const vibe::store::FileHostConfigStore host_config_store{vibe::net::DefaultStorageRoot()};
+      const vibe::store::FileHostConfigStore host_config_store{storage_root};
       if (const auto host_identity = host_config_store.LoadHostIdentity(); host_identity.has_value()) {
         if (!admin_host_explicit) {
           admin_host = host_identity->admin_host;

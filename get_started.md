@@ -498,6 +498,17 @@ systemctl --user status sentrits.service --no-pager
 journalctl --user -u sentrits.service --no-pager
 ```
 
+Sentrits also mirrors `serve` output into rotated per-user log files:
+
+```bash
+tail -n 200 ~/.sentrits/logs/sentrits.log
+```
+
+The active file is `~/.sentrits/logs/sentrits.log`, with older segments kept as
+`sentrits.log.1` through `sentrits.log.5`.
+
+You can view the same recent log tail in the Host Admin `Activity` tab.
+
 If another machine cannot reach the remote listener:
 
 - confirm the daemon is bound to `0.0.0.0` or the LAN IP, not `127.0.0.1`

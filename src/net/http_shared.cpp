@@ -18,6 +18,7 @@
 
 #include "vibe/net/discovery.h"
 #include "vibe/net/json.h"
+#include "vibe/net/local_auth.h"
 #include "vibe/net/request_parsing.h"
 #include "vibe/base/debug_trace.h"
 
@@ -35,6 +36,7 @@ auto MakeJsonResponse(const HttpRequest& request, http::status status, std::stri
 auto MakeTextResponse(const HttpRequest& request, http::status status, std::string_view content_type,
                       std::string body) -> HttpResponse;
 auto MakeRandomHexToken(std::size_t bytes) -> std::string;
+auto MakeServeLogResponse(const HttpRequest& request, const HttpRouteContext& context) -> HttpResponse;
 
 template <typename Collection, typename Predicate, typename Value>
 void UpsertBy(Collection& collection, Predicate predicate, Value&& value) {
@@ -395,6 +397,44 @@ auto ReadFile(const std::filesystem::path& path) -> std::optional<std::string> {
   std::ostringstream buffer;
   buffer << input.rdbuf();
   return buffer.str();
+}
+
+auto ReadRecentLines(const std::vector<std::filesystem::path>& paths, const std::size_t max_lines)
+    -> std::optional<std::vector<std::string>> {
+  std::deque<std::string> tail;
+  bool found_any = false;
+
+  for (const auto& path : paths) {
+    std::ifstream input(path);
+    if (!input.is_open()) {
+      continue;
+    }
+
+    found_any = true;
+    std::string line;
+    while (std::getline(input, line)) {
+      if (tail.size() == max_lines) {
+        tail.pop_front();
+      }
+      tail.push_back(std::move(line));
+    }
+  }
+
+  if (!found_any) {
+    return std::nullopt;
+  }
+
+  return std::vector<std::string>(tail.begin(), tail.end());
+}
+
+auto ServeLogCandidatePaths(const std::filesystem::path& storage_root) -> std::vector<std::filesystem::path> {
+  const auto log_path = DefaultServeLogPath(storage_root);
+  std::vector<std::filesystem::path> paths;
+  for (std::size_t index = 5; index > 0; --index) {
+    paths.push_back(std::filesystem::path(log_path.string() + "." + std::to_string(index)));
+  }
+  paths.push_back(log_path);
+  return paths;
 }
 
 auto LoadHostUiAsset(const std::string_view relative_path) -> std::optional<std::string> {
@@ -976,6 +1016,30 @@ auto HandleHostTlsCertificate(const HttpRequest& request, const HttpRouteContext
   return response;
 }
 
+auto MakeServeLogResponse(const HttpRequest& request, const HttpRouteContext& context) -> HttpResponse {
+  if (const auto auth_response = RequireLocalHostAdmin(request, context); auth_response.has_value()) {
+    return *auth_response;
+  }
+
+  const auto storage_root = context.storage_root.empty() ? DefaultStorageRoot() : context.storage_root;
+  const auto log_path = DefaultServeLogPath(storage_root);
+  const auto entries = ReadRecentLines(ServeLogCandidatePaths(storage_root), 200);
+
+  json::object body;
+  body["path"] = log_path.string();
+  body["source"] = "serve_log_file";
+  body["available"] = entries.has_value();
+  if (entries.has_value()) {
+    body["entries"] = json::value_from(*entries);
+  } else {
+    body["entries"] = json::array{};
+    body["message"] =
+        "sentrits serve log file not found yet; restart the daemon on a build with file logging enabled";
+  }
+
+  return MakeJsonResponse(request, http::status::ok, json::serialize(body));
+}
+
 auto HandleCreateSessionRequest(const HttpRequest& request, vibe::service::SessionManager& session_manager,
                                 const HttpRouteContext& context) -> HttpResponse {
   const auto parsed_request = ParseCreateSessionRequest(request.body());
@@ -1250,6 +1314,10 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
         context.host_config_store != nullptr ? context.host_config_store->LoadHostIdentity() : std::nullopt;
     return MakeJsonResponse(request, http::status::ok,
                             ToJsonHostInfo(host_identity, context.remote_tls_enabled));
+  }
+
+  if (request.method() == http::verb::get && request.target() == "/host/logs") {
+    return MakeServeLogResponse(request, context);
   }
 
   if (request.method() == http::verb::get && request.target() == "/discovery/info") {
