@@ -1454,6 +1454,27 @@ TEST(HttpSharedTest, CreateSessionFailureIncludesExplicitDetail) {
             std::string::npos);
 }
 
+TEST(HttpSharedTest, CreateSessionResolveFailureIncludesExplicitDetail) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+
+  HttpRequest request;
+  request.method(http::verb::post);
+  request.target("/host/sessions");
+  request.version(11);
+  request.body() = R"({"workspaceRoot":".","title":"missing-provider"})";
+  request.prepare_payload();
+
+  const HttpResponse response =
+      HandleRequest(request, session_manager, MakeAuthContext(authorizer, pairing_service, host_config_store));
+  EXPECT_EQ(response.result(), http::status::bad_request);
+  EXPECT_NE(response.body().find("\"error\":\"failed to resolve create session request\""), std::string::npos);
+  EXPECT_NE(response.body().find("\"detail\":\"provider is required unless --record is used\""),
+            std::string::npos);
+}
+
 TEST(HttpSharedTest, SavesExpandedHostConfig) {
   auto session_manager = MakeManager();
   FakeAuthorizer authorizer;
@@ -1524,6 +1545,7 @@ TEST(HttpSharedTest, RejectsHostUiRoutesForNonLocalRequests) {
       .authorizer = &authorizer,
       .pairing_service = &pairing_service,
       .host_config_store = &host_config_store,
+      .storage_root = host_config_store.storage_root(),
       .client_address = "10.0.0.8",
       .is_local_request = false,
       .remote_listener_host = "",

@@ -984,6 +984,20 @@ auto ParseProviderOption(const std::string& value) -> std::optional<vibe::sessio
   return std::nullopt;
 }
 
+void ConsumeImplicitProviderPositional(ParsedCommandOptions& options) {
+  if (options.provider.has_value() || options.positionals.empty()) {
+    return;
+  }
+
+  const auto provider = ParseProviderOption(options.positionals.front());
+  if (!provider.has_value()) {
+    return;
+  }
+
+  options.provider = *provider;
+  options.positionals.erase(options.positionals.begin());
+}
+
 auto ParseCommandOptions(const int argc, char** argv, int start_index,
                          vibe::cli::DaemonEndpoint default_endpoint) -> std::optional<ParsedCommandOptions> {
   ParsedCommandOptions options;
@@ -1228,8 +1242,14 @@ auto main(const int argc, char** argv) -> int {
   if (command == "session-start") {
     if (auto options = ParseCommandOptions(argc, argv, 2, LoadConfiguredAdminEndpoint());
         options.has_value()) {
+      ConsumeImplicitProviderPositional(*options);
+      if (!options->positionals.empty()) {
+        std::cerr << "unexpected positional arguments for session-start\n";
+        PrintUsage();
+        return 1;
+      }
       const std::string title = options->title.value_or("host-session");
-      const auto session_id = vibe::cli::CreateSession(
+      const auto created = vibe::cli::CreateSessionWithDetail(
           options->endpoint,
           vibe::cli::CreateSessionRequest{
               .provider = options->provider,
@@ -1239,13 +1259,17 @@ auto main(const int argc, char** argv) -> int {
               .command_argv = std::nullopt,
               .command_shell = options->shell_command,
           });
-      if (!session_id.has_value()) {
+      if (!created.session_id.has_value()) {
         std::cerr << "failed to create session via daemon at " << options->endpoint.host << ":"
-                  << options->endpoint.port << '\n';
+                  << options->endpoint.port;
+        if (!created.error_message.empty()) {
+          std::cerr << ": " << created.error_message;
+        }
+        std::cerr << '\n';
         return 1;
       }
-      std::cerr << "session " << *session_id << " created\n";
-      return vibe::cli::AttachSession(options->endpoint, *session_id, vibe::session::ControllerKind::Host);
+      std::cerr << "session " << *created.session_id << " created\n";
+      return vibe::cli::AttachSession(options->endpoint, *created.session_id, vibe::session::ControllerKind::Host);
     }
     PrintUsage();
     return 1;
@@ -1311,13 +1335,19 @@ auto main(const int argc, char** argv) -> int {
     }
 
     if (subcommand == "start") {
-      const auto options = ParseCommandOptions(argc, argv, 3, LoadConfiguredAdminEndpoint());
+      auto options = ParseCommandOptions(argc, argv, 3, LoadConfiguredAdminEndpoint());
       if (!options.has_value()) {
         PrintUsage();
         return 1;
       }
+      ConsumeImplicitProviderPositional(*options);
+      if (!options->positionals.empty()) {
+        std::cerr << "unexpected positional arguments for session start\n";
+        PrintUsage();
+        return 1;
+      }
       const std::string title = options->title.value_or("session");
-      const auto session_id = vibe::cli::CreateSession(
+      const auto created = vibe::cli::CreateSessionWithDetail(
           options->endpoint,
           vibe::cli::CreateSessionRequest{
               .provider = options->provider,
@@ -1327,21 +1357,25 @@ auto main(const int argc, char** argv) -> int {
               .command_argv = std::nullopt,
               .command_shell = options->shell_command,
           });
-      if (!session_id.has_value()) {
+      if (!created.session_id.has_value()) {
         std::cerr << "failed to create session via daemon at " << options->endpoint.host << ":"
-                  << options->endpoint.port << '\n';
+                  << options->endpoint.port;
+        if (!created.error_message.empty()) {
+          std::cerr << ": " << created.error_message;
+        }
+        std::cerr << '\n';
         return 1;
       }
       if (options->json_output) {
         json::object object;
-        object["sessionId"] = *session_id;
+        object["sessionId"] = *created.session_id;
         object["title"] = title;
         std::cout << json::serialize(object) << '\n';
       } else {
-        std::cout << "session " << *session_id << " created\n";
+        std::cout << "session " << *created.session_id << " created\n";
       }
       if (options->attach_after_create) {
-        return vibe::cli::AttachSession(options->endpoint, *session_id, vibe::session::ControllerKind::Host);
+        return vibe::cli::AttachSession(options->endpoint, *created.session_id, vibe::session::ControllerKind::Host);
       }
       return 0;
     }

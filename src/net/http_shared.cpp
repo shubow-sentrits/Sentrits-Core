@@ -8,6 +8,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <random>
@@ -308,19 +309,30 @@ auto NowUnixMs() -> std::int64_t {
       .count();
 }
 
+struct CreateSessionResolutionResult {
+  std::optional<vibe::service::CreateSessionRequest> request;
+  std::string error_message;
+};
+
 auto ResolveCreateSessionRequest(const vibe::net::CreateSessionRequestPayload& payload,
                                  const vibe::store::HostConfigStore* host_config_store)
-    -> std::optional<vibe::service::CreateSessionRequest> {
+    -> CreateSessionResolutionResult {
   std::optional<vibe::store::HostIdentity> host_identity =
       host_config_store != nullptr ? host_config_store->LoadHostIdentity() : std::nullopt;
   const vibe::store::LaunchRecord* record = nullptr;
   if (payload.record_id.has_value()) {
     if (!host_identity.has_value()) {
-      return std::nullopt;
+      return CreateSessionResolutionResult{
+          .request = std::nullopt,
+          .error_message = "launch record requires host identity",
+      };
     }
     record = FindLaunchRecord(*host_identity, *payload.record_id);
     if (record == nullptr) {
-      return std::nullopt;
+      return CreateSessionResolutionResult{
+          .request = std::nullopt,
+          .error_message = "launch record not found",
+      };
     }
   }
 
@@ -333,8 +345,23 @@ auto ResolveCreateSessionRequest(const vibe::net::CreateSessionRequestPayload& p
   const std::optional<std::string> title =
       payload.title.has_value() ? payload.title
                                 : (record != nullptr ? std::optional(record->title) : std::nullopt);
-  if (!provider.has_value() || !workspace_root.has_value() || !title.has_value()) {
-    return std::nullopt;
+  if (!provider.has_value()) {
+    return CreateSessionResolutionResult{
+        .request = std::nullopt,
+        .error_message = "provider is required unless --record is used",
+    };
+  }
+  if (!workspace_root.has_value()) {
+    return CreateSessionResolutionResult{
+        .request = std::nullopt,
+        .error_message = "workspace root is required unless --record is used",
+    };
+  }
+  if (!title.has_value()) {
+    return CreateSessionResolutionResult{
+        .request = std::nullopt,
+        .error_message = "title is required unless --record is used",
+    };
   }
 
   vibe::service::CreateSessionRequest request{
@@ -354,8 +381,11 @@ auto ResolveCreateSessionRequest(const vibe::net::CreateSessionRequestPayload& p
                         ? *payload.group_tags
                         : (record != nullptr ? record->group_tags : std::vector<std::string>{}),
   };
-  return ApplyConfiguredProviderOverride(std::move(request),
-                                         host_identity.has_value() ? &*host_identity : nullptr);
+  return CreateSessionResolutionResult{
+      .request = ApplyConfiguredProviderOverride(std::move(request),
+                                                host_identity.has_value() ? &*host_identity : nullptr),
+      .error_message = {},
+  };
 }
 
 // Auto-save a launch record after a successful session create. Prepends the new
@@ -1048,13 +1078,19 @@ auto HandleCreateSessionRequest(const HttpRequest& request, vibe::service::Sessi
                             "{\"error\":\"invalid create session request\"}");
   }
 
-  const auto resolved_request = ResolveCreateSessionRequest(*parsed_request, context.host_config_store);
-  if (!resolved_request.has_value()) {
-    return MakeJsonResponse(request, http::status::bad_request,
-                            "{\"error\":\"failed to resolve create session request\"}");
+  const auto resolved = ResolveCreateSessionRequest(*parsed_request, context.host_config_store);
+  if (!resolved.request.has_value()) {
+    std::cerr << "failed to resolve create session request: "
+              << (resolved.error_message.empty() ? "unknown error" : resolved.error_message) << '\n';
+    json::object error;
+    error["error"] = "failed to resolve create session request";
+    if (!resolved.error_message.empty()) {
+      error["detail"] = resolved.error_message;
+    }
+    return MakeJsonResponse(request, http::status::bad_request, json::serialize(error));
   }
 
-  const auto created = session_manager.CreateSession(*resolved_request);
+  const auto created = session_manager.CreateSession(*resolved.request);
   if (!created.has_value()) {
     json::object error;
     error["error"] = "failed to create session";
@@ -1064,7 +1100,7 @@ auto HandleCreateSessionRequest(const HttpRequest& request, vibe::service::Sessi
     return MakeJsonResponse(request, http::status::internal_server_error, json::serialize(error));
   }
 
-  AutoSaveLaunchRecord(*resolved_request, context.host_config_store);
+  AutoSaveLaunchRecord(*resolved.request, context.host_config_store);
 
   return MakeJsonResponse(request, http::status::created, ToJson(*created));
 }
