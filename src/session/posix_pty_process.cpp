@@ -30,11 +30,15 @@
 #include <optional>
 #include <string_view>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 namespace vibe::session {
 namespace {
+
+constexpr auto kTerminateGracePeriod = std::chrono::milliseconds(1500);
+constexpr auto kTerminatePollInterval = std::chrono::milliseconds(25);
 
 class PtyTraceLogger {
  public:
@@ -159,6 +163,26 @@ auto MakeWindowSize(const TerminalSize terminal_size) -> winsize {
   window_size.ws_col = terminal_size.columns;
   window_size.ws_row = terminal_size.rows;
   return window_size;
+}
+
+auto WaitForProcessExit(const ProcessId pid, const std::chrono::milliseconds timeout)
+    -> std::optional<int> {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    int status = 0;
+    const pid_t wait_result = waitpid(static_cast<pid_t>(pid), &status, WNOHANG);
+    if (wait_result == static_cast<pid_t>(pid)) {
+      return status;
+    }
+    if (wait_result < 0) {
+      if (errno == ECHILD) {
+        return 0;
+      }
+      return std::nullopt;
+    }
+    std::this_thread::sleep_for(kTerminatePollInterval);
+  }
+  return std::nullopt;
 }
 
 }  // namespace
@@ -355,10 +379,17 @@ auto PosixPtyProcess::Terminate() -> bool {
     return false;
   }
 
-  int status = 0;
-  const pid_t wait_result = waitpid(static_cast<pid_t>(pid_), &status, 0);
-  if (wait_result < 0 && errno != ECHILD) {
-    return false;
+  if (!WaitForProcessExit(pid_, kTerminateGracePeriod).has_value()) {
+    const int kill_fallback_result = kill(static_cast<pid_t>(pid_), SIGKILL);
+    if (kill_fallback_result != 0 && errno != ESRCH) {
+      return false;
+    }
+
+    int status = 0;
+    const pid_t wait_result = waitpid(static_cast<pid_t>(pid_), &status, 0);
+    if (wait_result < 0 && errno != ECHILD) {
+      return false;
+    }
   }
 
   CloseMasterFd();
