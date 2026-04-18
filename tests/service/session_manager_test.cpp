@@ -626,9 +626,17 @@ TEST(SessionManagerTest, PollAllUpdatesOutputAndActivityTimestampsForLiveSession
   });
   ASSERT_TRUE(created.has_value());
 
-  manager.PollAll(100);
+  std::optional<SessionSummary> summary;
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    manager.PollAll(100);
+    summary = manager.GetSession(created->id.value());
+    if (summary.has_value() && summary->last_output_at_unix_ms.has_value() &&
+        summary->current_sequence > 0U) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
 
-  const auto summary = manager.GetSession(created->id.value());
   ASSERT_TRUE(summary.has_value());
   EXPECT_TRUE(summary->last_output_at_unix_ms.has_value());
   EXPECT_TRUE(summary->last_activity_at_unix_ms.has_value());
