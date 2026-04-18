@@ -794,6 +794,7 @@ auto SessionManager::LoadPersistedSessions() -> std::size_t {
         .last_observed_status = recovered_status,
         .last_observed_sequence = persisted.current_sequence,
         .last_traced_node_summary_key = std::nullopt,
+        .effective_environment = std::nullopt,
     });
     MaybeTraceNodeSummaryTransition(sessions_.back(), "load_persisted");
     loaded_count += 1;

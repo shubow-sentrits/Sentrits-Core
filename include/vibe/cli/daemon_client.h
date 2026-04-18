@@ -47,9 +47,9 @@ struct CreateSessionRequest {
   std::optional<std::vector<std::string>> command_argv;
   std::optional<std::string> command_shell;
   // Environment model fields.
-  std::optional<vibe::session::EnvMode> env_mode;
-  std::unordered_map<std::string, std::string> environment_overrides;
-  std::optional<std::string> env_file_path;
+  std::optional<vibe::session::EnvMode> env_mode{std::nullopt};
+  std::unordered_map<std::string, std::string> environment_overrides{};
+  std::optional<std::string> env_file_path{std::nullopt};
 };
 
 [[nodiscard]] auto BuildCreateSessionRequestBody(const CreateSessionRequest& request) -> std::string;

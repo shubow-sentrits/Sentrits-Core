@@ -67,9 +67,9 @@ struct CreateSessionRequestPayload {
   // Reference a previously auto-saved launch record as a starting point.
   std::optional<std::string> record_id;
   // Environment model fields.
-  std::optional<vibe::session::EnvMode> env_mode;
-  std::unordered_map<std::string, std::string> environment_overrides;
-  std::optional<std::string> env_file_path;
+  std::optional<vibe::session::EnvMode> env_mode{std::nullopt};
+  std::unordered_map<std::string, std::string> environment_overrides{};
+  std::optional<std::string> env_file_path{std::nullopt};
 };
 
 struct SessionGroupTagsUpdatePayload {
