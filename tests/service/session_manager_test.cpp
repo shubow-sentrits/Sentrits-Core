@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sys/stat.h>
 #include <system_error>
 #include <string>
 #include <thread>
@@ -100,8 +101,66 @@ class TempDirGuard {
   std::filesystem::path path_;
 };
 
+class ScopedEnvVar {
+ public:
+  ScopedEnvVar(const char* name, const std::string& value) : name_(name) {
+    if (const char* current = std::getenv(name_); current != nullptr) {
+      previous_value_ = std::string(current);
+    }
+    if (::setenv(name_, value.c_str(), 1) != 0) {
+      throw std::runtime_error("failed to set environment variable");
+    }
+  }
+
+  ScopedEnvVar(const ScopedEnvVar&) = delete;
+  auto operator=(const ScopedEnvVar&) -> ScopedEnvVar& = delete;
+
+  ~ScopedEnvVar() {
+    if (previous_value_.has_value()) {
+      static_cast<void>(::setenv(name_, previous_value_->c_str(), 1));
+    } else {
+      static_cast<void>(::unsetenv(name_));
+    }
+  }
+
+ private:
+  const char* name_;
+  std::optional<std::string> previous_value_;
+};
+
 auto SessionStartFixturePath() -> std::string {
   return SENTRITS_SESSION_START_FIXTURE_PATH;
+}
+
+void WriteExecutable(const std::filesystem::path& path, const std::string& content) {
+  std::ofstream output(path, std::ios::binary);
+  ASSERT_TRUE(output.is_open());
+  output << content;
+  output.close();
+  ASSERT_EQ(::chmod(path.c_str(), 0755), 0);
+}
+
+void ConfigureInteractiveShellPathFixture(const std::filesystem::path& home_dir,
+                                          const std::filesystem::path& bin_dir,
+                                          const std::string& command_name) {
+  std::filesystem::create_directories(home_dir);
+  std::filesystem::create_directories(bin_dir);
+
+  {
+    std::ofstream bash_profile(home_dir / ".bash_profile", std::ios::binary);
+    ASSERT_TRUE(bash_profile.is_open());
+    bash_profile << "case $- in *i*) [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" ;; esac\n";
+  }
+  {
+    std::ofstream bashrc(home_dir / ".bashrc", std::ios::binary);
+    ASSERT_TRUE(bashrc.is_open());
+    bashrc << "export PATH=\"" << bin_dir.string() << ":$PATH\"\n";
+  }
+
+  WriteExecutable(
+      bin_dir / command_name,
+      "#!/bin/sh\n"
+      "printf 'fixture:path-command %s\\n' \"" + command_name + "\"\n");
 }
 
 class GitSessionManagerTest : public ::testing::Test {
@@ -752,6 +811,72 @@ TEST(SessionManagerTest, CreateSessionDefaultShellModeCapturesMissingCommandOutp
   const auto tail = manager.GetTail(created->id.value(), 4096);
   ASSERT_TRUE(tail.has_value());
   EXPECT_NE(tail->data.find("__sentrits_missing_command__"), std::string::npos);
+}
+
+TEST(SessionManagerTest, CreateSessionDefaultShellModeFindsBareCommandFromInteractiveShellStartup) {
+  FakeSessionStore session_store;
+  FakeHostConfigStore host_config_store;
+  host_config_store.identity.bootstrap_shell_path = "/bin/bash";
+  TempDirGuard workspace("session-manager-shell-interactive-path");
+  TempDirGuard home("session-manager-shell-home");
+  const auto bin_dir = home.path() / "bin";
+  ConfigureInteractiveShellPathFixture(home.path(), bin_dir, "shell-only-cmd");
+  ScopedEnvVar scoped_home("HOME", home.path().string());
+
+  SessionManager manager(&session_store, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1),
+                         &host_config_store);
+
+  const auto created = manager.CreateSession(CreateSessionRequest{
+      .provider = vibe::session::ProviderType::Codex,
+      .workspace_root = workspace.path().string(),
+      .title = "shell-interactive-path",
+      .conversation_id = std::nullopt,
+      .command_argv = std::vector<std::string>{"shell-only-cmd"},
+      .command_shell = std::nullopt,
+      .group_tags = {},
+  });
+  ASSERT_TRUE(created.has_value()) << manager.last_create_error_message();
+
+  const auto summary = PollUntilStatus(manager, created->id.value(), vibe::session::SessionStatus::Exited);
+  ASSERT_TRUE(summary.has_value());
+  EXPECT_EQ(summary->status, vibe::session::SessionStatus::Exited);
+
+  const auto tail = manager.GetTail(created->id.value(), 4096);
+  ASSERT_TRUE(tail.has_value());
+  EXPECT_NE(tail->data.find("fixture:path-command shell-only-cmd"), std::string::npos);
+}
+
+TEST(SessionManagerTest, CreateSessionBootstrapModeDoesNotPickUpInteractiveShellOnlyPath) {
+  FakeHostConfigStore host_config_store;
+  host_config_store.identity.bootstrap_shell_path = "/bin/bash";
+  TempDirGuard workspace("session-manager-bootstrap-path");
+  TempDirGuard home("session-manager-bootstrap-home");
+  const auto bin_dir = home.path() / "bin";
+  ConfigureInteractiveShellPathFixture(home.path(), bin_dir, "bootstrap-only-cmd");
+  ScopedEnvVar scoped_home("HOME", home.path().string());
+
+  SessionManager manager(nullptr, vibe::session::CreatePlatformPtyProcess,
+                         std::chrono::milliseconds(1), std::chrono::milliseconds(1),
+                         &host_config_store);
+
+  const auto created = manager.CreateSession(CreateSessionRequest{
+      .provider = vibe::session::ProviderType::Codex,
+      .workspace_root = workspace.path().string(),
+      .title = "bootstrap-path-miss",
+      .conversation_id = std::nullopt,
+      .command_argv = std::vector<std::string>{"bootstrap-only-cmd"},
+      .command_shell = std::nullopt,
+      .group_tags = {},
+      .env_mode = vibe::session::EnvMode::BootstrapFromShell,
+  });
+
+  EXPECT_FALSE(created.has_value());
+  EXPECT_NE(manager.last_create_error_message().find("No such file or directory"), std::string::npos);
+  ASSERT_TRUE(manager.last_create_error_session_id().has_value());
+  const auto failed = manager.GetSnapshot(*manager.last_create_error_session_id());
+  ASSERT_TRUE(failed.has_value());
+  EXPECT_NE(failed->recent_terminal_tail.find("No such file or directory"), std::string::npos);
 }
 
 TEST(SessionManagerTest, CreateSessionShellCommandOverrideCapturesFailureOutput) {

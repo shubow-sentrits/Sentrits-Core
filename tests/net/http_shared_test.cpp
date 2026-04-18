@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <sys/stat.h>
+#include <thread>
 #include <vector>
 
 #include "vibe/auth/authorizer.h"
@@ -289,6 +291,24 @@ void WriteTextFile(const std::filesystem::path& path, const std::string& content
   ASSERT_TRUE(output.is_open());
   output << content;
   ASSERT_TRUE(output.good());
+}
+
+void WriteExecutable(const std::filesystem::path& path, const std::string& content) {
+  WriteTextFile(path, content);
+  ASSERT_EQ(::chmod(path.c_str(), 0755), 0);
+}
+
+void ConfigureInteractiveShellPathFixture(const std::filesystem::path& home_dir,
+                                          const std::filesystem::path& bin_dir,
+                                          const std::string& command_name) {
+  std::filesystem::create_directories(home_dir);
+  std::filesystem::create_directories(bin_dir);
+  WriteTextFile(home_dir / ".bash_profile",
+                "case $- in *i*) [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\" ;; esac\n");
+  WriteTextFile(home_dir / ".bashrc", "export PATH=\"" + bin_dir.string() + ":$PATH\"\n");
+  WriteExecutable(bin_dir / command_name,
+                  "#!/bin/sh\n"
+                  "printf 'fixture:path-command %s\\n' \"" + command_name + "\"\n");
 }
 
 TEST(HttpSharedTest, ReturnsHealthResponse) {
@@ -1307,6 +1327,57 @@ TEST(HttpSharedTest, ServesHostManagementRoutes) {
   EXPECT_EQ(sessions_after_clear.body(), "[]");
 
   std::filesystem::remove_all(host_config_store.storage_root_path);
+}
+
+TEST(HttpSharedTest, CreateSessionAppliesProviderOverrideFromInteractiveShellStartup) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  const auto workspace = MakeTempDir("sentrits-http-shared-shell-provider-workspace");
+  const auto home = MakeTempDir("sentrits-http-shared-shell-provider-home");
+  const auto bin_dir = home / "bin";
+  ConfigureInteractiveShellPathFixture(home, bin_dir, "provider-only-cmd");
+  host_config_store.identity->bootstrap_shell_path = "/bin/bash";
+  host_config_store.identity->codex_command = {
+      .executable = "provider-only-cmd",
+      .args = {},
+  };
+  ScopedEnvVar scoped_home("HOME", home.string());
+
+  HttpRequest create_request;
+  create_request.method(http::verb::post);
+  create_request.target("/sessions");
+  create_request.version(11);
+  create_request.set(http::field::authorization, "Bearer good-token");
+  create_request.body() = "{\"provider\":\"codex\",\"workspaceRoot\":\"" + workspace.string() +
+                          "\",\"title\":\"provider-shell-path\"}";
+  create_request.prepare_payload();
+
+  const HttpResponse create_response =
+      HandleRequest(create_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store));
+  EXPECT_EQ(create_response.result(), http::status::created);
+
+  std::optional<vibe::service::SessionSummary> summary;
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    session_manager.PollAll(10);
+    summary = session_manager.GetSession("s_1");
+    if (summary.has_value() && summary->status == vibe::session::SessionStatus::Exited) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  ASSERT_TRUE(summary.has_value());
+  EXPECT_EQ(summary->status, vibe::session::SessionStatus::Exited);
+
+  const auto tail = session_manager.GetTail("s_1", 4096);
+  ASSERT_TRUE(tail.has_value());
+  EXPECT_NE(tail->data.find("fixture:path-command provider-only-cmd"), std::string::npos);
+
+  std::filesystem::remove_all(workspace);
+  std::filesystem::remove_all(home);
 }
 
 TEST(HttpSharedTest, ServesHostTrustedDeviceRoutesAndLocalSessionCreation) {
