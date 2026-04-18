@@ -48,6 +48,7 @@ set(SENTRITS_TEST_SOURCES
   tests/service/git_inspector_test.cpp
   tests/service/session_manager_test.cpp
   tests/service/workspace_file_watcher_test.cpp
+  tests/session/env_resolver_test.cpp
   tests/session/launch_spec_test.cpp
   tests/session/posix_pty_process_test.cpp
   tests/session/pty_process_factory_test.cpp
