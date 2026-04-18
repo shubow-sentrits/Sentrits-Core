@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#ifndef SENTRITS_VERSION
+#define SENTRITS_VERSION "0.0.0"
+#endif
+
 #include "vibe/net/json.h"
 
 namespace vibe::net {
@@ -19,7 +23,7 @@ TEST(HttpJsonTest, SerializesHostInfo) {
   EXPECT_NE(json.find("\"remotePort\":18086"), std::string::npos);
   EXPECT_NE(json.find("\"providerCommands\""), std::string::npos);
   EXPECT_NE(json.find("\"launchRecordCount\":0"), std::string::npos);
-  EXPECT_NE(json.find("\"version\":\"0.2.2\""), std::string::npos);
+  EXPECT_NE(json.find(std::string("\"version\":\"") + SENTRITS_VERSION + "\""), std::string::npos);
   EXPECT_NE(json.find("\"capabilities\":[\"sessions\",\"rest\",\"websocket\",\"launchRecords\"]"),
             std::string::npos);
 }

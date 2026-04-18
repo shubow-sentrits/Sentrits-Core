@@ -689,9 +689,17 @@ TEST(SessionManagerTest, CreateSessionDefaultShellModeKeepsLongRunningFixtureInt
   ASSERT_TRUE(summary.has_value());
   EXPECT_EQ(summary->status, vibe::session::SessionStatus::Running);
 
-  const auto tail = manager.GetTail(created->id.value(), 4096);
-  ASSERT_TRUE(tail.has_value());
-  EXPECT_NE(tail->data.find("fixture:sleep 5"), std::string::npos);
+  bool found_fixture_output = false;
+  for (int attempt = 0; attempt < 50 && !found_fixture_output; ++attempt) {
+    manager.PollAll(10);
+    const auto tail = manager.GetTail(created->id.value(), 4096);
+    ASSERT_TRUE(tail.has_value());
+    found_fixture_output = tail->data.find("fixture:sleep 5") != std::string::npos;
+    if (!found_fixture_output) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  EXPECT_TRUE(found_fixture_output);
 }
 
 TEST(SessionManagerTest, CreateSessionDefaultShellModeCapturesFixtureFailureOutput) {
