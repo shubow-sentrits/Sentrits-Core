@@ -61,6 +61,12 @@ jobs:
             -DSENTRITS_BUILD_TESTS=ON \
             -DSENTRITS_WEB_REPO="${GITHUB_WORKSPACE}/Sentrits-Web"
 
+      - name: Build Linux tests
+        run: cmake --build build --target sentrits_tests
+
+      - name: Run Linux tests
+        run: ctest --test-dir build --output-on-failure
+
       - name: Build Debian package
         run: cmake --build build --target sentrits_package_deb
 
@@ -119,6 +125,12 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DSENTRITS_BUILD_TESTS=ON \
             -DSENTRITS_WEB_REPO="${GITHUB_WORKSPACE}/Sentrits-Web"
+
+      - name: Build macOS tests
+        run: cmake --build build --target sentrits_tests
+
+      - name: Run macOS tests
+        run: ctest --test-dir build --output-on-failure
 
       # Builds the DMG (primary artifact) and tar.gz (secondary artifact).
       # The sentrits_package_macos_dmg target depends on sentrits_package_macos,
