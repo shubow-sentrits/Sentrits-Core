@@ -426,6 +426,22 @@ TEST(SessionManagerTest, CreateSessionWithDirectCommandDefaultsToBootstrapEnviro
 
     return std::make_unique<CapturingPtyProcess>(&captured_launch_spec);
   });
+  const auto created = manager.CreateSession(CreateSessionRequest{
+      .provider = vibe::session::ProviderType::Codex,
+      .workspace_root = ".",
+      .title = "direct-command",
+      .conversation_id = std::nullopt,
+      .command_argv = std::vector<std::string>{"/bin/sh", "-c", "sleep 30"},
+      .command_shell = std::nullopt,
+      .group_tags = {},
+  });
+
+  EXPECT_FALSE(created.has_value());
+  ASSERT_TRUE(captured_launch_spec.has_value());
+  EXPECT_EQ(captured_launch_spec->effective_environment.mode,
+            vibe::session::EnvMode::BootstrapFromShell);
+}
+
 TEST(SessionManagerTest, CreateSessionWithGarbageCommandSurfacesLaunchFailureDetail) {
   SessionManager manager(nullptr, vibe::session::CreatePlatformPtyProcess,
                          std::chrono::milliseconds(1), std::chrono::milliseconds(1));
@@ -453,17 +469,6 @@ TEST(SessionManagerTest, CreateSessionCanStartThenExitImmediately) {
   const auto created = manager.CreateSession(CreateSessionRequest{
       .provider = vibe::session::ProviderType::Codex,
       .workspace_root = ".",
-      .title = "direct-command",
-      .conversation_id = std::nullopt,
-      .command_argv = std::vector<std::string>{"/bin/sh", "-c", "sleep 30"},
-      .command_shell = std::nullopt,
-      .group_tags = {},
-  });
-
-  EXPECT_FALSE(created.has_value());
-  ASSERT_TRUE(captured_launch_spec.has_value());
-  EXPECT_EQ(captured_launch_spec->effective_environment.mode,
-            vibe::session::EnvMode::BootstrapFromShell);
       .title = "exit-immediately",
       .conversation_id = std::nullopt,
       .command_argv = std::vector<std::string>{"/bin/sh", "-c", "printf 'bye\\n'; exit 0"},
