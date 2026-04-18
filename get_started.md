@@ -498,6 +498,23 @@ systemctl --user status sentrits.service --no-pager
 journalctl --user -u sentrits.service --no-pager
 ```
 
+If session creation fails because the daemon cannot reproduce the shell environment you expect:
+
+- Sentrits bootstraps provider and direct-exec session environment from a login shell by default
+- bootstrap warnings are logged to the daemon log and service journal when the shell prints to stderr during environment capture
+- those warnings are emitted when the daemon creates a session with the bootstrapped environment path, regardless of whether the request came from the CLI, Host Admin UI, or a remote client
+- inspect:
+
+```bash
+journalctl --user -u sentrits.service --no-pager
+tail -n 200 ~/.sentrits/logs/sentrits.log
+```
+
+- common causes:
+  - shell init files reference missing tools
+  - service `PATH` does not include version-manager shims like `nvm`, `pnpm`, or `bun`
+  - a login shell prints warnings even though it exits successfully
+
 If another machine cannot reach the remote listener:
 
 - confirm the daemon is bound to `0.0.0.0` or the LAN IP, not `127.0.0.1`

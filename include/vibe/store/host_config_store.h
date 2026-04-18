@@ -58,6 +58,11 @@ struct HostIdentity {
   std::vector<LaunchRecord> launch_records;
   std::size_t max_launch_records{kDefaultMaxLaunchRecords};
 
+  // Daemon-wide environment policy (for session bootstrap).
+  std::optional<std::string> bootstrap_shell_path;
+  bool import_service_manager_environment{false};
+  std::vector<std::string> service_manager_environment_allowlist;
+
   [[nodiscard]] auto operator==(const HostIdentity& other) const -> bool = default;
 };
 

@@ -15,6 +15,10 @@ set(VIBE_CORE_SOURCES
   src/service/git_inspector.cpp
   src/service/session_manager.cpp
   src/service/workspace_file_watcher.cpp
+  src/session/env_config.cpp
+  src/session/env_file_parser.cpp
+  src/session/bootstrapped_env_cache.cpp
+  src/session/env_resolver.cpp
   src/session/launch_spec.cpp
   src/session/posix_pty_process.cpp
   src/session/pty_process_factory.cpp

@@ -351,6 +351,9 @@ auto ResolveCreateSessionRequest(const vibe::net::CreateSessionRequestPayload& p
       .group_tags = payload.group_tags.has_value()
                         ? *payload.group_tags
                         : (record != nullptr ? record->group_tags : std::vector<std::string>{}),
+      .env_mode = payload.env_mode,
+      .environment_overrides = payload.environment_overrides,
+      .env_file_path = payload.env_file_path,
   };
   return ApplyConfiguredProviderOverride(std::move(request),
                                          host_identity.has_value() ? &*host_identity : nullptr);
@@ -1435,6 +1438,7 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
     const auto input_suffix = std::string("/input");
     const auto stop_suffix = std::string("/stop");
     const auto tail_marker = std::string("/tail");
+    const auto env_suffix = std::string("/env");
 
     if (remainder.size() > snapshot_suffix.size() && remainder.ends_with(snapshot_suffix)) {
       if (const auto auth_response =
@@ -1586,6 +1590,23 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
       }
 
       return MakeJsonResponse(request, http::status::ok, "{\"status\":\"stopped\"}");
+    }
+
+    if (request.method() == http::verb::get && remainder.size() > env_suffix.size() &&
+        remainder.ends_with(env_suffix)) {
+      if (const auto auth_response =
+              RequireAuthorization(request, context, vibe::auth::AuthorizationAction::ObserveSessions);
+          auth_response.has_value()) {
+        return *auth_response;
+      }
+
+      const std::string session_id = remainder.substr(0, remainder.size() - env_suffix.size());
+      const auto env = session_manager.GetSessionEnv(session_id);
+      if (!env.has_value()) {
+        return MakeJsonResponse(request, http::status::not_found, "{\"error\":\"session not found\"}");
+      }
+
+      return MakeJsonResponse(request, http::status::ok, ToJson(*env, /*redact=*/true));
     }
 
     if (const auto auth_response =
