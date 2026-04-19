@@ -73,7 +73,7 @@ jobs:
       - name: Smoke Debian install and uninstall
         run: |
           set -euo pipefail
-          DEB_PATH="$(ls build/*.deb)"
+          DEB_PATH="$(ls build/cpack/*.deb)"
           sudo dpkg -i "$DEB_PATH"
           test -x /usr/bin/sentrits
           test -f /usr/lib/sentrits/www/_metadata/sentrits-web-revision.txt
@@ -90,7 +90,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sentrits-debian-package-${{ github.ref_name }}
-          path: build/*.deb
+          path: build/cpack/*.deb
 
   package-macos:
     needs: resolve-web-revision
