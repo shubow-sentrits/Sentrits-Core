@@ -101,33 +101,48 @@ auto BuildAppendTraceSummary(const std::string_view data) -> std::optional<std::
   return summary.str();
 }
 
-void AppendUtf8(std::string& out, const uint32_t codepoint) {
+auto NormalizeUnicodeScalar(const uint32_t codepoint) -> uint32_t {
   if (codepoint == 0U) {
+    return 0U;
+  }
+
+  // libvterm can surface out-of-range values for unsupported glyphs. Replace
+  // invalid Unicode scalars so snapshot JSON always remains valid UTF-8.
+  if (codepoint > 0x10FFFFU || (codepoint >= 0xD800U && codepoint <= 0xDFFFU)) {
+    return 0xFFFDU;
+  }
+
+  return codepoint;
+}
+
+void AppendUtf8(std::string& out, const uint32_t codepoint) {
+  const uint32_t scalar = NormalizeUnicodeScalar(codepoint);
+  if (scalar == 0U) {
     return;
   }
 
-  if (codepoint <= 0x7FU) {
-    out.push_back(static_cast<char>(codepoint));
+  if (scalar <= 0x7FU) {
+    out.push_back(static_cast<char>(scalar));
     return;
   }
 
-  if (codepoint <= 0x7FFU) {
-    out.push_back(static_cast<char>(0xC0U | ((codepoint >> 6U) & 0x1FU)));
-    out.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
+  if (scalar <= 0x7FFU) {
+    out.push_back(static_cast<char>(0xC0U | ((scalar >> 6U) & 0x1FU)));
+    out.push_back(static_cast<char>(0x80U | (scalar & 0x3FU)));
     return;
   }
 
-  if (codepoint <= 0xFFFFU) {
-    out.push_back(static_cast<char>(0xE0U | ((codepoint >> 12U) & 0x0FU)));
-    out.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
-    out.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
+  if (scalar <= 0xFFFFU) {
+    out.push_back(static_cast<char>(0xE0U | ((scalar >> 12U) & 0x0FU)));
+    out.push_back(static_cast<char>(0x80U | ((scalar >> 6U) & 0x3FU)));
+    out.push_back(static_cast<char>(0x80U | (scalar & 0x3FU)));
     return;
   }
 
-  out.push_back(static_cast<char>(0xF0U | ((codepoint >> 18U) & 0x07U)));
-  out.push_back(static_cast<char>(0x80U | ((codepoint >> 12U) & 0x3FU)));
-  out.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
-  out.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
+  out.push_back(static_cast<char>(0xF0U | ((scalar >> 18U) & 0x07U)));
+  out.push_back(static_cast<char>(0x80U | ((scalar >> 12U) & 0x3FU)));
+  out.push_back(static_cast<char>(0x80U | ((scalar >> 6U) & 0x3FU)));
+  out.push_back(static_cast<char>(0x80U | (scalar & 0x3FU)));
 }
 
 auto CellsToUtf8Line(const VTermScreenCell* cells, const int cols) -> std::string {
