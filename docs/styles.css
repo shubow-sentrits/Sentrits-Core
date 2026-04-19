@@ -1,14 +1,16 @@
 :root {
-  color-scheme: light;
-  --bg: #f4efe3;
-  --panel: rgba(255, 251, 242, 0.9);
-  --panel-border: rgba(73, 60, 34, 0.12);
-  --ink: #1e1a13;
-  --muted: #5f5544;
-  --accent: #1f5d53;
-  --accent-strong: #13453d;
-  --accent-soft: #dde9e6;
-  --shadow: 0 18px 44px rgba(41, 30, 8, 0.12);
+  color-scheme: dark;
+  --bg-top: #0f1720;
+  --bg-bottom: #12161c;
+  --panel: rgba(13, 20, 28, 0.9);
+  --panel-soft: rgba(21, 30, 39, 0.72);
+  --panel-border: rgba(122, 145, 163, 0.2);
+  --ink: #ecf0e8;
+  --muted: #b8c5d0;
+  --subtle: #95a7b8;
+  --accent: #d8e3ef;
+  --accent-ink: #11202d;
+  --shadow: 0 18px 60px rgba(0, 0, 0, 0.24);
 }
 
 * {
@@ -17,16 +19,15 @@
 
 body {
   margin: 0;
-  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
   color: var(--ink);
   background:
-    radial-gradient(circle at top left, rgba(33, 94, 84, 0.18), transparent 28rem),
-    radial-gradient(circle at top right, rgba(160, 96, 38, 0.16), transparent 24rem),
-    linear-gradient(180deg, #fbf7ee 0%, var(--bg) 100%);
+    radial-gradient(circle at top right, rgba(82, 109, 130, 0.38), transparent 32%),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
 }
 
 a {
-  color: var(--accent-strong);
+  color: var(--accent);
 }
 
 code,
@@ -44,7 +45,7 @@ pre {
   padding: 2.5rem;
   border: 1px solid var(--panel-border);
   border-radius: 28px;
-  background: linear-gradient(135deg, rgba(255, 250, 242, 0.95), rgba(236, 246, 242, 0.92));
+  background: var(--panel);
   box-shadow: var(--shadow);
 }
 
@@ -65,13 +66,13 @@ pre {
   letter-spacing: 0.14em;
   text-transform: uppercase;
   font-size: 0.76rem;
-  color: var(--muted);
+  color: var(--subtle);
 }
 
 h1,
 h2,
 h3 {
-  font-family: Georgia, "Iowan Old Style", serif;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
   line-height: 1.05;
 }
 
@@ -122,14 +123,14 @@ h3 {
 }
 
 .button-primary {
-  color: #f8f7f2;
-  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: var(--accent-ink);
+  background: var(--accent);
 }
 
 .button-secondary {
-  color: var(--accent-strong);
-  background: rgba(255, 255, 255, 0.55);
-  border: 1px solid rgba(31, 93, 83, 0.16);
+  color: var(--ink);
+  background: rgba(216, 227, 239, 0.08);
+  border: 1px solid rgba(122, 145, 163, 0.16);
 }
 
 main {
@@ -161,8 +162,8 @@ main {
 .feature {
   padding: 1rem;
   border-radius: 18px;
-  background: rgba(221, 233, 230, 0.55);
-  border: 1px solid rgba(31, 93, 83, 0.08);
+  background: var(--panel-soft);
+  border: 1px solid rgba(122, 145, 163, 0.16);
 }
 
 .two-column {
@@ -179,8 +180,8 @@ pre {
   padding: 1rem;
   overflow-x: auto;
   border-radius: 16px;
-  background: #1d1c19;
-  color: #efe8db;
+  background: rgba(8, 12, 16, 0.82);
+  color: #c8d6e3;
 }
 
 .note {
@@ -190,6 +191,10 @@ pre {
 .link-list {
   margin: 0;
   padding-left: 1.2rem;
+}
+
+.panel li + li {
+  margin-top: 0.35rem;
 }
 
 @media (max-width: 720px) {
