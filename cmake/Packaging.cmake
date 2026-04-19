@@ -89,6 +89,7 @@ function(sentrits_configure_packaging)
   set(CPACK_PACKAGE_CONTACT "shubow")
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Sentrits daemon-first runtime packaging")
   set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+  set(CPACK_PACKAGE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/cpack")
   set(CPACK_PACKAGE_FILE_NAME
       "sentrits-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 
@@ -105,7 +106,9 @@ function(sentrits_configure_packaging)
 
     add_custom_target(sentrits_package_deb
       DEPENDS sentrits sentrits_stage_web_assets
-      COMMAND "${CMAKE_CPACK_COMMAND}" -G DEB --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_BINARY_DIR}/cpack"
+      COMMAND "${CMAKE_COMMAND}" -E chdir "${CMAKE_BINARY_DIR}"
+              "${CMAKE_CPACK_COMMAND}" -G DEB --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
       COMMENT "Build a Debian package for Sentrits"
       VERBATIM
     )

@@ -7,3 +7,4 @@ build-*/
 .codex
 .vscode/
 .agents/
+_CPack_Packages/
