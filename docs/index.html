@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sentrits</title>
+    <meta
+      name="description"
+      content="Persistent CLI coding sessions across devices, with supervision, control handoff, and real execution continuity."
+    >
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-brand">
+          <img class="hero-logo" src="assets/Sentrits-logo.png" alt="Sentrits logo">
+          <p class="eyebrow">Persistent Session Runtime</p>
+        </div>
+        <h1>Sentrits</h1>
+        <p class="hero-copy">
+          Persistent CLI coding sessions across devices, with supervision, control handoff,
+          and real execution continuity.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/shubow-sentrits/Sentrits-Core">View On GitHub</a>
+          <a class="button button-secondary" href="https://github.com/shubow-sentrits/Sentrits-Core/releases">Releases</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="panel">
+          <h2>Scope</h2>
+          <p>
+            Sentrits is a session runtime and control plane for AI coding CLIs. It keeps the
+            actual terminal-backed process alive on a host machine while clients attach, detach,
+            observe, and hand off control across devices.
+          </p>
+          <div class="feature-grid">
+            <article class="feature">
+              <h3>Persistent Sessions</h3>
+              <p>Start once, reconnect later, and keep the live process running.</p>
+            </article>
+            <article class="feature">
+              <h3>Observe And Control</h3>
+              <p>Many clients may watch a session while a single controller owns input.</p>
+            </article>
+            <article class="feature">
+              <h3>Cross-Device Handoff</h3>
+              <p>Switch active control between host, web, and iOS without restarting the workflow.</p>
+            </article>
+            <article class="feature">
+              <h3>Session Bootstrap</h3>
+              <p>Reconnect with useful terminal state instead of waiting for luck or repaint timing.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel two-column">
+          <div>
+            <h2>What It Is For</h2>
+            <ul>
+              <li>Long-running build, test, fix, and review loops.</li>
+              <li>Checking in on a real coding CLI while away from your desk.</li>
+              <li>Intervening from another device without restarting the session.</li>
+            </ul>
+          </div>
+          <div>
+            <h2>What It Is Not</h2>
+            <ul>
+              <li>Not a full mobile IDE.</li>
+              <li>Not another generic remote shell wrapper.</li>
+              <li>Not an internet relay service as the primary product shape today.</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Quick Start</h2>
+          <p>Sentrits currently targets macOS and Linux hosts.</p>
+          <div class="quickstart-grid">
+            <article>
+              <h3>macOS</h3>
+              <pre><code>./tools/dev/install-macos.sh ./build/sentrits-&lt;version&gt;-macos-$(uname -m).dmg</code></pre>
+            </article>
+            <article>
+              <h3>Linux</h3>
+              <pre><code>sudo dpkg -i ./build/cpack/sentrits_&lt;version&gt;_amd64.deb
+sentrits service install
+systemctl --user daemon-reload
+systemctl --user enable sentrits.service
+systemctl --user start sentrits.service</code></pre>
+            </article>
+          </div>
+          <p class="note">
+            Then use commands like <code>sentrits host status</code>, <code>sentrits session list</code>,
+            and <code>sentrits session start --provider codex --attach</code>.
+          </p>
+        </section>
+
+        <section class="panel">
+          <h2>Project Links</h2>
+          <ul class="link-list">
+            <li><a href="https://github.com/shubow-sentrits/Sentrits-Core">Sentrits-Core</a></li>
+            <li><a href="https://github.com/shubow-sentrits/Sentrits-Web">Sentrits-Web</a></li>
+            <li><a href="https://github.com/shubow-sentrits/Sentrits-IOS">Sentrits-IOS</a></li>
+            <li><a href="https://github.com/shubow-sentrits/Sentrits-Core/releases">Releases</a></li>
+            <li><a href="https://github.com/shubow-sentrits/Sentrits-Core/blob/main/README.md">README</a></li>
+            <li><a href="https://github.com/shubow-sentrits/Sentrits-Core/blob/main/get_started.md">Getting Started</a></li>
+          </ul>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
