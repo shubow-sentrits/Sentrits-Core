@@ -33,7 +33,13 @@ Supported host platforms today:
 
 #### macOS
 
-Install the packaged tarball into a stable user-owned location, then bootstrap the per-user `launchd` agent.
+Install the packaged DMG into a stable user-owned location, then bootstrap the per-user `launchd` agent.
+
+Recommended helper:
+
+```bash
+./tools/dev/install-macos.sh ./build/sentrits-<version>-macos-$(uname -m).dmg
+```
 
 Detailed macOS package build, install, smoke-test, and uninstall notes:
 
@@ -212,6 +218,12 @@ Remove the installed package root:
 
 ```bash
 rm -rf ~/Applications/Sentrits
+```
+
+Recommended helper:
+
+```bash
+./tools/dev/uninstall-macos.sh
 ```
 
 Detailed macOS package install, smoke-test, uninstall, and state notes:
