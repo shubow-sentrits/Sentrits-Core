@@ -49,10 +49,36 @@ These are hard rules.
 
 - Hub may authenticate user accounts
 - Hub may associate devices with accounts
+- Hub issues a stable `device_id` per registered device; this is an account-level
+  identity, not a session access credential
 - Host alone authenticates session participants
 - Hub must never authenticate a device *into a host session* on the host’s behalf
+- Host maps Hub `device_id` to a local pairing record and makes all access
+  decisions using that local record; Hub identity is input to host policy only
 - Host alone decides whether a device is trusted
 - Host alone decides whether a client is an observer or controller
+- Internet pairing reuses the existing Core `StartPairing → ApprovePairing →
+  ClaimApprovedPairing` flow with one schema extension: `PairingRecord` gains
+  an optional `hub_device_id` field to carry the Hub-issued device identity
+  alongside the host-generated `device_id` and `bearer_token`; Hub forwards
+  pairing messages as transport only and never approves pairings on behalf of
+  the host
+
+### Identity and Connection Model
+
+Two identity concepts must not be conflated:
+
+- `device_id` (Hub-issued) — stable principal, persisted on the device and
+  stored as an optional `hub_device_id` field on the host's `PairingRecord`
+  after internet pairing. Does not replace the host-generated `device_id` or
+  `bearer_token` in that record. Lets the host recognize a returning
+  Hub-mediated device across sessions and connections.
+- `client_id` — per-connection handle, Core-generated, ephemeral. Identifies a
+  single attached connection. One device may hold multiple concurrent connections.
+
+Hub `device_id` is carried as authenticated metadata on a connection. It does
+not replace `client_id`. Controller semantics (one controller per session) apply
+at the `client_id` level, unchanged.
 
 ### Cloud boundary
 
@@ -64,12 +90,31 @@ These are hard rules.
 - Hub must not inspect or store session payload
 - Hub must not act as an observer or controller
 
+### Attention and Session Metadata
+
+- Core pushes coarse session/attention metadata to Hub over the outbound
+  heartbeat channel on state change
+- Hub polling Core is not used; it is incompatible with NAT-traversal requirements
+- The only metadata Hub may store for notification purposes:
+  - host id, session id, session title, coarse lifecycle state,
+    coarse attention state / reason
+- Hub stores no terminal output, no replay data, no controller state
+
 ### Privacy
 
 - Terminal output must not be stored in Hub
 - Terminal input must not be stored in Hub
 - Replay history must not be stored in Hub
 - Hub may store only minimal metadata required for routing, presence, and notifications
+
+### Graceful Degradation
+
+This is a hard requirement.
+
+- If Hub is unreachable, `Sentrits-Core` must continue to operate over
+  localhost and LAN with zero session degradation
+- No session may be paused, lost, or degraded because Hub is down
+- Hub connectivity must be treated as optional at the Core runtime level
 
 ### Product surface
 
@@ -116,30 +161,57 @@ These are not MVP goals.
 
 `Sentrits-Core` should only be changed when necessary to:
 
-- support Hub-mediated transport
-- export minimal notification signals
-- support end-to-end host/device authentication over new transport paths
+- store and use the Hub-issued host credential for outbound Hub authentication
+- add minimal outbound Hub client (heartbeat, session metadata push, attention
+  event push) — required because Core is server-only today and NAT traversal
+  requires Core to initiate outbound connections to Hub
+- support Hub-mediated transport adapter layer
+- support end-to-end host/device authentication handshake over new transport paths
+- extend `PairingRecord` (`include/vibe/auth/pairing.h`) with an optional
+  `hub_device_id` field and update serialization in `src/store/file_stores.cpp`
+  to persist it — this is the only pairing schema change required; all existing
+  pairing logic, host-generated `device_id`, and `bearer_token` remain unchanged
 
 `Sentrits-Core` should not be changed merely to make Hub easier to build.
+
+### Core-Change Guardrail
+
+Source of truth for session/replay/control model:
+
+- `src/service/session_manager.cpp`
+- `include/vibe/session/session_output_buffer.h`
+- `src/session/session_output_buffer.cpp`
+- `src/net/http_server.cpp`
+
+`host_id` is already generated and persisted by `GenerateHostId()` /
+`EnsureHostIdentity()` in `src/store/host_config_store.cpp`, called at init
+from `src/net/local_auth.cpp`. Phase 1 relies on this existing behavior — no
+new generation logic is needed.
+
+Any proposed Core change that does not map directly to one of the permitted
+reasons above must be rejected and reconsidered at the Hub or protocol layer.
 
 ## Sentrits-Hub Responsibilities
 
 `Sentrits-Hub` owns:
 
 - account authentication
-- device registration
-- host registration
-- presence / heartbeat tracking
+- device registration and `device_id` issuance
+- host registration and host credential (host token) issuance
+- presence / heartbeat tracking (receives pushes from Core, does not poll)
 - host discovery for user devices
 - rendezvous candidate exchange
 - relay allocation and transport forwarding
 - push notification fanout
+- forwarding pairing messages between device and host (transport only — Hub
+  never approves or stores pairing decisions)
 
 `Sentrits-Hub` may store:
 
 - account ids
 - device ids
 - host ids
+- Hub-issued host credentials (host tokens)
 - presence timestamps
 - relay allocation metadata
 - rendezvous session metadata
@@ -160,6 +232,31 @@ Minimal notification metadata means:
 - replay history
 - controller state as source of truth
 - attach authorization state as source of truth
+
+## Client SDK / Transport Library Responsibilities
+
+A client-side transport/signaling library is a required MVP workstream. Without
+it there is no delivery surface for mobile or web clients over Hub.
+
+The client SDK owns:
+
+- Hub discovery and account authentication
+- Device registration and `device_id` persistence
+- Host listing and presence polling
+- Relay-first session attach and replay over Hub-mediated transport
+- Pairing flow over forwarded relay messages
+- Push notification token registration with Hub
+- Reconnect and replay resume by `session_id` + last known sequence
+- Direct-connect negotiation as a later optimization after relay-first is proven
+
+The client SDK must not:
+
+- make session access decisions
+- store session replay or terminal output
+- bypass host-side auth and pairing
+
+Mobile is the primary target. A minimal web equivalent is needed for the
+control-plane dashboard.
 
 ## Mobile Responsibilities
 
@@ -219,14 +316,17 @@ Desktop is not required to prove the core Sentrits value proposition.
 
 MVP means:
 
-- Hub can authenticate accounts
+- Hub can authenticate accounts and issue stable `device_id` and host tokens
 - devices can discover their hosts through Hub
-- hosts can report presence through Hub
-- Hub can deliver attention notifications
-- mobile can attach to an existing host session
+- hosts can report presence through Hub (Core pushes over outbound channel)
+- Hub can deliver attention notifications triggered by Core push
+- mobile can attach to an existing host session over Hub relay
 - host remains the only authority for session access
 - replay and reconnect work against the existing Core model
 - relay path works without moving session logic into Hub
+- pairing works over forwarded relay messages using existing Core pairing flow
+- Core continues to work over LAN/localhost if Hub is unreachable
+- client SDK exists for mobile to discover, connect, and attach
 
 MVP does not require:
 
@@ -234,19 +334,7 @@ MVP does not require:
 - multi-session desktop UX
 - deep orchestration tooling
 - feature parity across mobile, desktop, and web
-
-## Implementation Rule
-
-Prefer this sequence:
-
-1. preserve current `Sentrits-Core` runtime semantics
-2. build Hub control-plane and notification plumbing
-3. add the smallest transport/auth seam necessary in Core
-4. ship mobile-first intervention flow
-5. add direct-connect optimization later
-
-Do not reverse this by building large new local UI or transport abstractions
-first unless clearly required.
+- direct peer-to-peer connect (relay-first proves the architecture; direct is an optimization)
 
 ## Technology Direction
 
@@ -268,13 +356,34 @@ This is recommended because it matches the MVP:
 - strong concurrency needs
 - fast delivery of mobile-first product value
 
+## Implementation Rule
+
+Prefer this sequence:
+
+1. preserve current `Sentrits-Core` runtime semantics
+2. build Hub control-plane and notification plumbing
+3. add the smallest transport/auth seam necessary in Core (outbound Hub client,
+   host token storage, transport adapter)
+4. ship mobile-first intervention flow
+5. add direct-connect optimization later
+
+Do not reverse this by building large new local UI or transport abstractions
+first unless clearly required.
+
 ## Definition of Success
 
 The architecture is being followed if:
 
 - `Sentrits-Core` remains the session authority
 - Hub remains a control plane plus relay
+- Core operates normally when Hub is unreachable
 - mobile becomes the primary intervention surface
 - web remains intentionally minimal in MVP
 - notifications drive user re-entry into long-running sessions
 - reconnect and replay remain host-owned and trustworthy
+- `device_id` (stable principal) and `client_id` (per-connection handle) are
+  kept distinct in all implementation decisions
+- internet pairing uses the existing Core pairing flow forwarded through relay,
+  with only the addition of an optional `hub_device_id` field on `PairingRecord`
+  — not a new Hub-approved pairing mechanism
+- relay-first is the MVP-A success bar; direct connect is a post-MVP-A optimization

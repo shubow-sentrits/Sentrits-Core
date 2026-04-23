@@ -161,6 +161,8 @@ session state management.
   - [`include/vibe/service/session_manager.h`](/home/shubow/dev/Sentrits-Core/include/vibe/service/session_manager.h)
   - [`src/service/session_manager.cpp`](/home/shubow/dev/Sentrits-Core/src/service/session_manager.cpp)
   - [`src/net/http_server.cpp`](/home/shubow/dev/Sentrits-Core/src/net/http_server.cpp)
+  - [`include/vibe/session/session_output_buffer.h`](/home/shubow/dev/Sentrits-Core/include/vibe/session/session_output_buffer.h)
+  - [`src/session/session_output_buffer.cpp`](/home/shubow/dev/Sentrits-Core/src/session/session_output_buffer.cpp)
 - Remote API and websocket lanes:
   - [`src/net/http_shared.cpp`](/home/shubow/dev/Sentrits-Core/src/net/http_shared.cpp)
   - [`src/net/http_server.cpp`](/home/shubow/dev/Sentrits-Core/src/net/http_server.cpp)
@@ -168,6 +170,46 @@ session state management.
   - [`src/net/http_shared.cpp`](/home/shubow/dev/Sentrits-Core/src/net/http_shared.cpp)
   - [`src/auth/default_pairing_service.cpp`](/home/shubow/dev/Sentrits-Core/src/auth/default_pairing_service.cpp)
   - [`include/vibe/store/pairing_store.h`](/home/shubow/dev/Sentrits-Core/include/vibe/store/pairing_store.h)
+- Host identity (already generates and persists stable `host_id`):
+  - [`src/store/host_config_store.cpp`](/home/shubow/dev/Sentrits-Core/src/store/host_config_store.cpp) — `GenerateHostId()`, `EnsureHostIdentity()`
+  - [`src/net/local_auth.cpp`](/home/shubow/dev/Sentrits-Core/src/net/local_auth.cpp) — calls `EnsureHostIdentity()` at init
+
+### Core-Change Guardrail
+
+`Sentrits-Core` should only be changed for these specific reasons during Hub
+integration. Any proposed Core change that does not fit one of these categories
+should be rejected and reconsidered at the Hub or protocol layer instead.
+
+Permitted Core changes:
+- Generate and expose Hub registration credential (store Hub-issued host token
+  alongside `HostIdentity`)
+- Add minimal outbound Hub client (heartbeat, session metadata push, attention
+  event push) — Core is currently server-only; this is required for NAT
+  traversal
+- Add transport adapter layer to route Hub relay/direct streams through
+  existing session attach semantics
+- Export attention event signals to Hub over the outbound channel
+- Support end-to-end host/device authentication handshake over new transport
+  paths
+- Extend `PairingRecord` (`include/vibe/auth/pairing.h`) with an optional
+  `hub_device_id` field; update serialization in `src/store/file_stores.cpp`
+  to persist it. This is the only pairing schema change required. All existing
+  pairing logic, host-generated `device_id`, and `bearer_token` remain
+  unchanged.
+
+Not permitted without explicit justification:
+- Redesigning session persistence, replay, or control semantics
+- Moving any trust or session-state logic into Hub-visible form
+- Adding Hub-specific session fields to `SessionManager` or `SessionSummary`
+- Replacing or redesigning host-generated pairing credentials (`device_id`,
+  `bearer_token`) — the only permitted pairing change is adding an optional
+  `hub_device_id` field to `PairingRecord`
+
+Source of truth for session/replay/control model:
+- `src/service/session_manager.cpp`
+- `include/vibe/session/session_output_buffer.h`
+- `src/session/session_output_buffer.cpp`
+- `src/net/http_server.cpp`
 
 ### Existing behavior to treat as source of truth
 
@@ -183,20 +225,58 @@ session state management.
 These behaviors should be preserved and exposed over internet transport rather
 than redesigned.
 
+### Graceful Degradation Requirement
+
+This is a hard requirement, not a nice-to-have.
+
+If `Sentrits-Hub` is unreachable, `Sentrits-Core` must continue to operate over
+localhost and LAN with zero session degradation. No session should be paused,
+lost, or degraded because Hub is down. Hub is an additive internet transport
+layer. The local runtime is always self-sufficient.
+
+### Identity and Connection Model
+
+Two distinct identity concepts must not be conflated:
+
+- `device_id` (Hub-issued) — stable principal, persisted on the device and
+  stored as an optional `hub_device_id` field on the host's `PairingRecord`
+  after internet pairing. Does not replace the host-generated `device_id` or
+  `bearer_token` in that record. Lets the host recognize a returning
+  Hub-mediated device on future connections.
+- `client_id` — per-connection handle, Core-generated, ephemeral. Identifies a
+  single attached connection. One device may have multiple concurrent
+  connections.
+
+Hub `device_id` is carried as authenticated metadata on a connection. It does
+not replace `client_id`. Controller semantics (one controller per session)
+continue to apply at the `client_id` level, unchanged.
+
 ## Gaps To Be Solved By Sentrits-Hub
 
 - No Hub-backed host discovery over the public internet
 - No Hub rendezvous service for direct connection setup
 - No Hub relay fallback transport
-- Pairing is host-local today, not Hub-assisted forwarding
-- No direct device identity handshake over a Hub-forwarded path
+- Core has no outbound HTTP client; heartbeats, session metadata push, and
+  attention event export all require adding a minimal Hub client to Core
+- No Hub-issued host credential for host→Hub authentication; Hub must issue a
+  long-lived host token at registration, stored alongside `HostIdentity` in
+  Core's local store
+- Pairing is host-local today; for internet mode, Hub forwards pairing messages
+  between device and host over relay — Hub does not approve pairings
+- No direct device identity handshake over a Hub-forwarded path; Hub
+  `device_id` must map to a host-local pairing record — Hub authenticates the
+  device to Hub, host authenticates the device to the session
 - No NAT traversal strategy
-- No Hub push-notification path for attention events
+- No Hub push-notification path for attention events; Core will push coarse
+  attention/session metadata to Hub over the same outbound heartbeat channel
+  (Hub polling is not viable once Core is behind NAT)
 - Current web scope is broader than the intended MVP dashboard role
 - The Hub/Core trust boundary is not yet formalized in code or docs:
-  - account auth may live in Hub
+  - account auth lives in Hub
   - session participant auth must remain host-side
   - relay must stay transport-only
+- No client-side SDK/library scoped for Hub discovery and transport negotiation
+  (mobile-first; required for any client to reach a Hub-mediated session)
 
 ## MVP Hierarchy
 
@@ -220,54 +300,63 @@ This is the non-negotiable baseline. Internet mode must not break these.
 
 Minimal Hub control plane.
 
-- [ ] Account authentication in Hub
-- [ ] Device registration API
-- [ ] Host registration API
-- [ ] Host heartbeat / online presence
-- [ ] Client can list its visible hosts from Hub
-- [ ] Hub stores only routing metadata and presence metadata
-- [ ] Host identity exposed to Hub uses stable `host_id`
-- [ ] Device identity exposed to Hub uses stable `device_id`
-- [ ] Hub stores enough lightweight session metadata to notify mobile:
+- [x] Account authentication in Hub
+- [x] Device registration API
+- [x] Host registration API
+- [x] Hub issues long-lived host credential (host token) at registration; Core
+      stores it alongside `HostIdentity`
+- [x] Host heartbeat / online presence (Core pushes over outbound channel using
+      existing `host_id` from `EnsureHostIdentity()` — no new generation needed)
+- [x] Core adds minimal outbound Hub client for heartbeat and metadata push
+- [x] Client can list its visible hosts from Hub
+- [x] Hub stores only routing metadata and presence metadata
+- [x] Host identity exposed to Hub uses stable `host_id` (already generated by
+      `GenerateHostId()` / `EnsureHostIdentity()` in Core)
+- [x] Device identity exposed to Hub uses stable `device_id`
+- [x] Core pushes coarse session metadata to Hub over heartbeat channel:
   - session id
   - title
   - coarse state
   - attention state / reason
+  - (source: `SessionSummary` in `session_manager.h`)
+- [x] If Hub is unreachable, Core continues over localhost/LAN with no
+      degradation
 
 Deliverable:
 - Client can see "which of my hosts are online" without yet attaching
 
-### MVP 2: Hub Rendezvous for Direct Connection
+Definition of done:
+- [x] Host registers with Hub on startup using Hub-issued token
+- [x] Host sends periodic heartbeats; Hub reflects online/offline state
+- [x] Client can list hosts associated with its account
+- [x] Core works normally if Hub endpoint is unreachable
 
-Hub helps connect peers but does not join session logic.
+### MVP 2: Hub Relay Attach and Replay
 
-- [ ] Host asks Hub for rendezvous session
-- [ ] Client asks Hub to connect to host
-- [ ] Hub exchanges candidate addresses between host and client
-- [ ] Attempt direct peer-to-peer transport first
-- [ ] Host and client complete direct host-auth handshake without trusting Hub
-- [ ] Hub does not authorize session attach
-- [ ] Hub-issued account/device identity is only input to host policy, never the decision itself
-
-Deliverable:
-- Best-effort direct connection path over the public internet
-
-### MVP 3: Hub Relay Fallback
-
-When direct path fails, fall back to Hub relay as dumb byte forwarder.
+Relay-first is the MVP-A path. Hub is a dumb transport layer while the host
+remains the authority for replay, attach, and control.
 
 - [ ] Relay channels created by Hub for host/client pair
 - [ ] Relay forwards opaque bytes only
 - [ ] Relay does not decode session protocol
 - [ ] Relay does not inspect or store session payload
-- [ ] Host/client protocol above relay remains identical to direct path
+- [ ] Host/client protocol above relay reuses current host attach semantics
 - [ ] Reconnect over relay still resumes existing host session
-- [ ] Host-side auth and session attach semantics are identical on direct and relay paths
+- [ ] Replay remains host-owned and sequence-based over relay:
+  - snapshot fetch
+  - `GetOutputSince(...)`
+  - reconnect by `session_id` + last known sequence
 
 Deliverable:
-- Direct first, relay second, same host-owned semantics either way
+- Internet attach works end-to-end over relay without changing current
+  `Sentrits-Core` replay or control semantics
 
-### MVP 4: End-to-End Trust and Pairing Over Internet
+Definition of done:
+- Relay forwards bytes opaquely between host and client
+- Reconnect over relay resumes existing host session by `session_id`
+- Replay catch-up works over relay using the existing Core sequence model
+
+### MVP 3: End-to-End Trust and Pairing Over Internet
 
 Host remains the sole trust authority.
 
@@ -276,13 +365,26 @@ Host remains the sole trust authority.
 - [ ] Host accepts or rejects connection
 - [ ] Hub cannot approve, impersonate, or inject trust
 - [ ] Hub may assert account identity, but host still evaluates device trust locally
-- [ ] Pairing flow works through forwarded messages when host/client are remote
+- [ ] Pairing flow works through forwarded messages when host/client are remote;
+      Hub forwards pairing messages as transport only — the existing Core
+      `StartPairing → ApprovePairing → ClaimApprovedPairing` flow is reused
+      with one schema extension: `PairingRecord` gains an optional
+      `hub_device_id` field to carry the Hub-issued device identity alongside
+      the host-generated credentials
+- [ ] Hub never approves a pairing on behalf of the host
+- [ ] Hub `device_id` maps to the host's local pairing record after pairing completes
 - [ ] Pairing result is stored only in host local trusted-device store
 
 Deliverable:
 - Internet-capable pairing without Hub-owned permissions
 
-### MVP 5: Remote Session Attach / Replay / Control
+Definition of done:
+- Device can initiate pairing with host through Hub-forwarded relay messages
+- Host approves/rejects using existing local pairing logic
+- Hub `device_id` is associated with host pairing record post-approval
+- No pairing state is stored in Hub
+
+### MVP 4: Remote Session Attach / Replay / Control
 
 Reuse current session model over the new transport.
 
@@ -299,7 +401,13 @@ Reuse current session model over the new transport.
 Deliverable:
 - Internet client behavior matches current LAN / localhost semantics
 
-### MVP 6: Notification-driven intervention
+Definition of done:
+- Client can list sessions, fetch snapshot, replay, attach, and control over internet
+- Disconnect does not kill the session; reconnect resumes by `session_id`
+- `device_id` (stable principal) and `client_id` (per-connection handle) remain
+  distinct; controller semantics operate at `client_id` level, unchanged
+
+### MVP 5: Notification-driven intervention
 
 This is part of the core product value, not an optional add-on.
 
@@ -311,6 +419,35 @@ This is part of the core product value, not an optional add-on.
 
 Deliverable:
 - user can stay in the loop away from desk
+
+Definition of done:
+- Host pushes attention events to Hub over the outbound heartbeat channel
+- Hub delivers push notification to mobile via APNs
+- Notification contains only minimal metadata (session id, title, attention reason)
+- Mobile deep-link lands on correct host/session attach flow
+
+### MVP 6: Hub Rendezvous for Direct Connection
+
+This is a post-MVP-A optimization. It should reuse the same host auth and
+session semantics already proven on relay.
+
+- [ ] Host asks Hub for rendezvous session
+- [ ] Client asks Hub to connect to host
+- [ ] Hub exchanges candidate addresses between host and client
+- [ ] Attempt direct peer-to-peer transport first
+- [ ] Host and client complete direct host-auth handshake without trusting Hub
+- [ ] Hub does not authorize session attach
+- [ ] Hub-issued `device_id` is presented to host as identity metadata; host
+      maps it to a local pairing record and makes the access decision itself
+- [ ] Hub-issued account/device identity is only input to host policy, never the decision itself
+
+Deliverable:
+- Best-effort direct connection path over the public internet
+
+Definition of done:
+- Host and client can negotiate a direct connection through Hub rendezvous
+- Host completes auth handshake directly with device, independent of Hub
+- Hub `device_id` maps to host's local paired device record
 
 ### MVP 7: Security and Privacy Hardening
 
@@ -333,15 +470,21 @@ Deliverable:
 
 - [ ] Define cloud objects:
   - account
-  - host registration
+  - host registration (including Hub-issued host token)
   - device registration
   - presence / heartbeat
   - rendezvous session
   - relay allocation
   - push notification subscription
-- [ ] Implement Hub host heartbeat
+- [ ] Implement Hub host registration and host token issuance
+- [ ] Implement Hub host heartbeat receiver
+- [ ] Add minimal outbound Hub client to Core (heartbeat + coarse session
+      metadata push); uses existing `host_id` from `EnsureHostIdentity()` —
+      no new generation needed
+- [ ] Store Hub-issued host token alongside `HostIdentity` in Core's local store
 - [ ] Implement Hub-backed client host listing
 - [ ] Implement APNs push plumbing
+- [ ] Verify: Core operates normally when Hub endpoint is unreachable
 
 ### Phase 2: Minimal host-facing transport seam
 
@@ -352,36 +495,39 @@ needed to let the current runtime speak over Hub-mediated transports.
 - [ ] Keep current `SessionManager` and replay model unchanged
 - [ ] Reuse current remote HTTP / WS attach semantics where practical
 - [ ] Add Hub direct/relay stream implementations around the existing host APIs
-- [ ] Document each required `Sentrits-Core` change and justify it as necessary glue
-- [ ] Add the smallest possible attention-event export path for Hub notifications
+- [ ] Document each required `Sentrits-Core` change and justify it against the
+      Core-change guardrail (see above)
+- [ ] Attention events export via the outbound Hub client added in Phase 1 —
+      Core pushes on state change; Hub polling is explicitly not used (host may
+      be behind NAT)
+- [ ] First transport target is relay, not direct; replay and reconnect over
+      relay are the primary validation target
 
-### Phase 3: Direct connect
-
-- [ ] Add rendezvous candidate exchange
-- [ ] Add direct connect attempt
-- [ ] Add host-auth handshake over direct stream
-
-### Phase 4: Relay fallback
+### Phase 3: Relay attach, replay, and pairing
 
 - [ ] Add relay byte channel
 - [ ] Reuse same authenticated stream protocol over relay
-
-### Phase 5: Internet pairing
-
+- [ ] Validate snapshot + replay resume over relay
 - [ ] Add host-mediated remote pairing handshake
 - [ ] Persist approved device locally on host
 
-### Phase 6: Notification-driven mobile flow
+### Phase 4: Notification-driven mobile flow
 
 - [ ] Emit host-side attention events
 - [ ] Push to mobile through Hub
 - [ ] Mobile deep-link to session inspect/attach
 
-### Phase 7: Reconnect and recovery polish
+### Phase 5: Reconnect and recovery polish
 
 - [ ] Resume by session id
 - [ ] Replay from last revision
 - [ ] Controller transfer and reconnect edge cases
+
+### Phase 6: Direct connect optimization
+
+- [ ] Add rendezvous candidate exchange
+- [ ] Add direct connect attempt
+- [ ] Add host-auth handshake over direct stream
 
 ## Checklist by Workstream
 
@@ -397,8 +543,8 @@ needed to let the current runtime speak over Hub-mediated transports.
 ### Client Runtime
 
 - [ ] Discover hosts from cloud presence
-- [ ] Attempt direct connect first
-- [ ] Fall back to relay automatically
+- [ ] Connect via relay (MVP-A); direct connect is added as a post-MVP-A optimization
+- [ ] Fall back to relay automatically when direct connect is attempted (MVP-B)
 - [ ] Resume sessions using last known session id + revision
 
 ### Mobile Runtime
@@ -421,6 +567,21 @@ needed to let the current runtime speak over Hub-mediated transports.
 ### Desktop Runtime
 
 - [ ] Explicitly out of MVP unless needed for narrow admin/testing tasks
+
+### Client SDK / Transport Library
+
+This is a required MVP workstream. Without it there is no delivery surface for
+mobile or web clients.
+
+- [ ] Hub discovery and authentication (account login, device registration)
+- [ ] Host listing from Hub
+- [ ] Relay-first session attach over Hub-mediated transport
+- [ ] Replay and reconnect using `session_id` + last known sequence
+- [ ] Pairing flow over forwarded relay messages
+- [ ] Push notification registration (APNs device token delivery to Hub)
+- [ ] Mobile-first: optimize for quick attach, inspect, disconnect
+- [ ] Minimal web equivalent for control-plane dashboard (host/session listing)
+- [ ] Direct-connect negotiation added after relay-first path is proven
 
 ### Cloud Service
 
@@ -573,7 +734,7 @@ Internet mode is done when all of the following are true:
 - [ ] Host alone decides who is trusted
 - [ ] Host alone decides who controls a session
 - [ ] Cloud stores no session payload and cannot read replay data
-- [ ] Direct connect is attempted first
-- [ ] Relay fallback works when direct connect fails
+- [ ] Relay transport works end-to-end (direct connect is a post-MVP-A optimization)
+- [ ] Relay fallback works when direct connect fails (MVP-B)
 - [ ] Hub can push attention notifications with minimal metadata only
 - [ ] Mobile can inspect and intervene without requiring a desk-bound workflow
