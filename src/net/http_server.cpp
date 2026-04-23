@@ -2623,7 +2623,7 @@ auto HttpServer::Run() -> bool {
             << (remote_tls_config.enabled ? " with TLS (HTTPS/WSS)" : " without TLS (HTTP/WS)")
             << '\n';
   if (hub_client_) {
-    hub_client_->Start();
+    hub_client_->Start(*io_context_);
   }
   io_context_->run();
   if (hub_client_) {
