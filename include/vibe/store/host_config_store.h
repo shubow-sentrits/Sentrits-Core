@@ -64,6 +64,12 @@ struct HostIdentity {
   bool import_service_manager_environment{false};
   std::vector<std::string> service_manager_environment_allowlist{};
 
+  // Sentrits-Hub registration. When both are set Core registers with Hub
+  // on startup and sends periodic heartbeats. If either is empty Hub
+  // integration is disabled and Core operates in local-only mode.
+  std::optional<std::string> hub_url{};
+  std::optional<std::string> hub_token{};
+
   [[nodiscard]] auto operator==(const HostIdentity& other) const -> bool = default;
 };
 
@@ -84,6 +90,8 @@ struct HostIdentity {
   identity.bootstrap_shell_path = std::nullopt;
   identity.import_service_manager_environment = false;
   identity.service_manager_environment_allowlist = {};
+  identity.hub_url = std::nullopt;
+  identity.hub_token = std::nullopt;
   return identity;
 }
 
