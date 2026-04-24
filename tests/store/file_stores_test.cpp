@@ -126,6 +126,38 @@ TEST_F(FileStoresTest, HostIdentityRoundTripsEnvironmentPolicyFields) {
   }
 }
 
+TEST_F(FileStoresTest, HostIdentityRoundTripsHubIntegrationFields) {
+  const HostIdentity expected{
+      .host_id = "host_hub",
+      .display_name = "Hub Host",
+      .certificate_pem_path = "",
+      .private_key_pem_path = "",
+      .admin_host = "127.0.0.1",
+      .admin_port = 18085,
+      .remote_host = "0.0.0.0",
+      .remote_port = 18086,
+      .codex_command = {},
+      .claude_command = {},
+      .launch_records = {},
+      .max_launch_records = kDefaultMaxLaunchRecords,
+      .bootstrap_shell_path = std::nullopt,
+      .import_service_manager_environment = false,
+      .service_manager_environment_allowlist = {},
+      .hub_url = "https://hub.example.test",
+      .hub_token = "hub-token-123",
+  };
+
+  {
+    FileHostConfigStore store(storage_root());
+    EXPECT_TRUE(store.SaveHostIdentity(expected));
+  }
+
+  {
+    FileHostConfigStore store(storage_root());
+    EXPECT_EQ(store.LoadHostIdentity(), std::optional<HostIdentity>{expected});
+  }
+}
+
 TEST_F(FileStoresTest, EnsureHostIdentityGeneratesAndPersistsStableHostId) {
   FileHostConfigStore store(storage_root());
 

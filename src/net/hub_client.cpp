@@ -13,6 +13,7 @@
 #include <chrono>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -29,9 +30,6 @@ namespace json = boost::json;
 using tcp = asio::ip::tcp;
 
 namespace {
-
-constexpr auto kHeartbeatInterval = std::chrono::seconds(30);
-constexpr auto kRequestTimeout = std::chrono::seconds(5);
 
 struct ParsedUrl {
   std::string scheme;
@@ -110,7 +108,8 @@ auto DoPost(Stream& stream, const std::string& host, const std::string& target,
 }
 
 auto PerformPost(const ParsedUrl& url, const std::string& bearer_token,
-                 const std::string& target, const std::string& body) -> bool {
+                 const std::string& target, const std::string& body,
+                 const HubClientOptions& options) -> bool {
   boost::system::error_code ec;
   asio::io_context ioc;
   tcp::resolver resolver(ioc);
@@ -124,7 +123,12 @@ auto PerformPost(const ParsedUrl& url, const std::string& bearer_token,
 
   if (url.scheme == "https") {
     asio::ssl::context ssl_ctx{asio::ssl::context::tls_client};
-    ssl_ctx.set_default_verify_paths();
+    if (options.use_default_verify_paths) {
+      ssl_ctx.set_default_verify_paths();
+    }
+    if (options.ca_certificate_file.has_value()) {
+      ssl_ctx.load_verify_file(*options.ca_certificate_file);
+    }
     ssl_ctx.set_verify_mode(asio::ssl::verify_peer);
     ssl_ctx.set_verify_callback(asio::ssl::host_name_verification(url.host));
 
@@ -133,7 +137,7 @@ auto PerformPost(const ParsedUrl& url, const std::string& bearer_token,
       std::cerr << "[hub] failed to set SNI hostname\n";
       return false;
     }
-    beast::get_lowest_layer(stream).expires_after(kRequestTimeout);
+    beast::get_lowest_layer(stream).expires_after(options.request_timeout);
     beast::get_lowest_layer(stream).connect(results, ec);
     if (ec) {
       std::cerr << "[hub] connect failed: " << ec.message() << '\n';
@@ -144,7 +148,7 @@ auto PerformPost(const ParsedUrl& url, const std::string& bearer_token,
       std::cerr << "[hub] TLS handshake failed: " << ec.message() << '\n';
       return false;
     }
-    beast::get_lowest_layer(stream).expires_after(kRequestTimeout);
+    beast::get_lowest_layer(stream).expires_after(options.request_timeout);
     const bool ok = DoPost(stream, url.host, target, bearer_token, body);
     stream.shutdown(ec);  // TLS close-notify; ignore errors
     return ok;
@@ -152,7 +156,7 @@ auto PerformPost(const ParsedUrl& url, const std::string& bearer_token,
 
   // Plain HTTP.
   beast::tcp_stream stream(ioc);
-  stream.expires_after(kRequestTimeout);
+  stream.expires_after(options.request_timeout);
   stream.connect(results, ec);
   if (ec) {
     std::cerr << "[hub] connect failed: " << ec.message() << '\n';
@@ -167,10 +171,12 @@ auto PerformPost(const ParsedUrl& url, const std::string& bearer_token,
 }  // namespace
 
 HubClient::HubClient(std::string hub_url, std::string hub_token,
-                     vibe::service::SessionManager& session_manager)
+                     vibe::service::SessionManager& session_manager,
+                     HubClientOptions options)
     : hub_url_(std::move(hub_url)),
       hub_token_(std::move(hub_token)),
-      session_manager_(session_manager) {}
+      session_manager_(session_manager),
+      options_(std::move(options)) {}
 
 HubClient::~HubClient() {
   Stop();
@@ -200,7 +206,7 @@ void HubClient::RunLoop() {
   SendHeartbeat();
   while (true) {
     std::unique_lock lock(mutex_);
-    cv_.wait_for(lock, kHeartbeatInterval, [this] { return stop_; });
+    cv_.wait_for(lock, options_.heartbeat_interval, [this] { return stop_; });
     if (stop_) {
       break;
     }
@@ -218,12 +224,13 @@ void HubClient::SendHeartbeat() {
 
   // Collect the session snapshot on the server's owning io_context thread so
   // that SessionManager is only ever accessed from one thread.
-  std::promise<std::vector<vibe::service::SessionSummary>> promise;
-  auto future = promise.get_future();
-  asio::post(*io_context_, [this, &promise]() {
-    promise.set_value(session_manager_.ListSessions());
+  auto promise =
+      std::make_shared<std::promise<std::vector<vibe::service::SessionSummary>>>();
+  auto future = promise->get_future();
+  asio::post(*io_context_, [this, promise]() {
+    promise->set_value(session_manager_.ListSessions());
   });
-  if (future.wait_for(kRequestTimeout) != std::future_status::ready) {
+  if (future.wait_for(options_.request_timeout) != std::future_status::ready) {
     // Server is shutting down or stalled; skip this heartbeat.
     return;
   }
@@ -244,9 +251,10 @@ void HubClient::SendHeartbeat() {
   payload["sessions"] = std::move(sessions_array);
   const std::string body = json::serialize(payload);
 
-  if (!PerformPost(*parsed, hub_token_, "/api/v1/hosts/heartbeat", body)) {
+  if (!PerformPost(*parsed, hub_token_, "/api/v1/hosts/heartbeat", body, options_)) {
     std::cerr << "[hub] heartbeat failed (will retry in "
-              << kHeartbeatInterval.count() << "s)\n";
+              << std::chrono::duration_cast<std::chrono::seconds>(options_.heartbeat_interval).count()
+              << "s)\n";
   }
 }
 

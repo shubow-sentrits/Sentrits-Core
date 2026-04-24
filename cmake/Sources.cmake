@@ -41,6 +41,7 @@ set(SENTRITS_TEST_SOURCES
   tests/cli/service_bootstrap_test.cpp
   tests/cli/session_attach_integration_test.cpp
   tests/net/discovery_broadcaster_test.cpp
+  tests/net/hub_client_test.cpp
   tests/net/http_json_test.cpp
   tests/net/http_server_integration_test.cpp
   tests/net/request_parsing_test.cpp
