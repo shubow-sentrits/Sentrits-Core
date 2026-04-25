@@ -17,6 +17,21 @@ add_executable(sentrits_session_start_fixture
   tests/helpers/session_start_fixture.cpp
 )
 
+add_executable(sentrits_supervision_probe
+  src/tools/supervision_probe.cpp
+)
+
+target_link_libraries(sentrits_supervision_probe
+  PRIVATE
+    vibe_core
+)
+
+# StackExpectation uses designated initializers with sparse field sets.
+# -Wmissing-designated-field-initializers is too strict for a dev probe tool.
+target_compile_options(sentrits_supervision_probe PRIVATE
+  -Wno-missing-designated-field-initializers
+)
+
 add_dependencies(sentrits_tests
   sentrits
   sentrits_session_start_fixture
