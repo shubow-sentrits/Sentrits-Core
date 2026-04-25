@@ -211,6 +211,8 @@ TEST(HttpJsonTest, SerializesSnapshotSignals) {
           },
       .signals =
           vibe::session::SessionSignals{
+              .last_raw_output_at_unix_ms = 95,
+              .last_meaningful_output_at_unix_ms = 100,
               .last_output_at_unix_ms = 100,
               .last_activity_at_unix_ms = 110,
               .last_file_change_at_unix_ms = 110,
@@ -225,6 +227,16 @@ TEST(HttpJsonTest, SerializesSnapshotSignals) {
               .attention_state = vibe::session::AttentionState::Info,
               .attention_reason = vibe::session::AttentionReason::WorkspaceChanged,
               .interaction_kind = vibe::session::SessionInteractionKind::RunningNonInteractive,
+              .terminal_semantic_change =
+                  vibe::session::TerminalSemanticChange{
+                      .kind = vibe::session::TerminalSemanticChangeKind::CosmeticChurn,
+                      .changed_visible_line_count = 1,
+                      .scrollback_lines_added = 0,
+                      .appended_visible_character_count = 1,
+                      .cursor_moved = false,
+                      .alt_screen_entered = false,
+                      .alt_screen_exited = false,
+                  },
               .git_dirty = true,
               .git_branch = "main",
               .git_modified_count = 1,
@@ -258,6 +270,8 @@ TEST(HttpJsonTest, SerializesSnapshotSignals) {
   EXPECT_NE(json.find("\"signals\""), std::string::npos);
   EXPECT_NE(json.find("\"groupTags\":[\"frontend\",\"mvp\"]"), std::string::npos);
   EXPECT_NE(json.find("\"lastOutputAtUnixMs\":100"), std::string::npos);
+  EXPECT_NE(json.find("\"lastRawOutputAtUnixMs\":95"), std::string::npos);
+  EXPECT_NE(json.find("\"lastMeaningfulOutputAtUnixMs\":100"), std::string::npos);
   EXPECT_NE(json.find("\"lastActivityAtUnixMs\":110"), std::string::npos);
   EXPECT_NE(json.find("\"currentSequence\":42"), std::string::npos);
   EXPECT_NE(json.find("\"bootstrapAnsi\":\"\\u001b[2J\\u001b[Hvisible\""), std::string::npos);
@@ -265,6 +279,7 @@ TEST(HttpJsonTest, SerializesSnapshotSignals) {
   EXPECT_NE(json.find("\"supervisionState\":\"active\""), std::string::npos);
   EXPECT_NE(json.find("\"attentionState\":\"info\""), std::string::npos);
   EXPECT_NE(json.find("\"attentionReason\":\"workspace_changed\""), std::string::npos);
+  EXPECT_NE(json.find("\"terminalSemanticChange\":{\"kind\":\"cosmetic_churn\""), std::string::npos);
   EXPECT_NE(json.find("\"gitDirty\":true"), std::string::npos);
   EXPECT_NE(json.find("\"gitBranch\":\"main\""), std::string::npos);
   EXPECT_NE(json.find("\"gitModifiedCount\":1"), std::string::npos);

@@ -1143,6 +1143,14 @@ TEST(SessionManagerTest, CosmeticDotOutputDoesNotKeepSessionSupervisionActive) {
   EXPECT_FALSE(summary->last_output_at_unix_ms.has_value());
   EXPECT_TRUE(summary->last_activity_at_unix_ms.has_value());
   EXPECT_EQ(summary->supervision_state, vibe::session::SupervisionState::Quiet);
+
+  const auto snapshot = manager.GetSnapshot(created->id.value());
+  ASSERT_TRUE(snapshot.has_value());
+  EXPECT_TRUE(snapshot->signals.last_raw_output_at_unix_ms.has_value());
+  EXPECT_FALSE(snapshot->signals.last_meaningful_output_at_unix_ms.has_value());
+  EXPECT_FALSE(snapshot->signals.last_output_at_unix_ms.has_value());
+  EXPECT_EQ(snapshot->signals.terminal_semantic_change.kind,
+            vibe::session::TerminalSemanticChangeKind::CosmeticChurn);
 }
 
 TEST(SessionManagerTest, ControlHandoffUpdatesActivityTimestamp) {
@@ -1175,6 +1183,7 @@ TEST(SessionManagerTest, ControlHandoffUpdatesActivityTimestamp) {
   EXPECT_GT(*requested_summary->last_activity_at_unix_ms, activity_before);
   EXPECT_EQ(requested_summary->attention_state, vibe::session::AttentionState::Info);
   EXPECT_EQ(requested_summary->attention_reason, vibe::session::AttentionReason::ControllerChanged);
+  EXPECT_EQ(requested_summary->semantic_preview, "Controller changed");
   EXPECT_TRUE(requested_summary->last_controller_change_at_unix_ms.has_value());
   EXPECT_EQ(requested_summary->attention_since_unix_ms, requested_summary->last_controller_change_at_unix_ms);
 

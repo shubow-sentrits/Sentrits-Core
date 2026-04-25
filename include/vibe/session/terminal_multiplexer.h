@@ -13,6 +13,43 @@
 
 namespace vibe::session {
 
+enum class TerminalSemanticChangeKind {
+  None,
+  MeaningfulOutput,
+  CosmeticChurn,
+  CursorOnly,
+  AltScreenTransition,
+};
+
+[[nodiscard]] constexpr auto ToString(const TerminalSemanticChangeKind kind) -> std::string_view {
+  switch (kind) {
+    case TerminalSemanticChangeKind::None:
+      return "none";
+    case TerminalSemanticChangeKind::MeaningfulOutput:
+      return "meaningful_output";
+    case TerminalSemanticChangeKind::CosmeticChurn:
+      return "cosmetic_churn";
+    case TerminalSemanticChangeKind::CursorOnly:
+      return "cursor_only";
+    case TerminalSemanticChangeKind::AltScreenTransition:
+      return "alt_screen_transition";
+  }
+
+  return "none";
+}
+
+struct TerminalSemanticChange {
+  TerminalSemanticChangeKind kind{TerminalSemanticChangeKind::None};
+  std::size_t changed_visible_line_count{0};
+  std::size_t scrollback_lines_added{0};
+  std::size_t appended_visible_character_count{0};
+  bool cursor_moved{false};
+  bool alt_screen_entered{false};
+  bool alt_screen_exited{false};
+
+  [[nodiscard]] auto operator==(const TerminalSemanticChange& other) const -> bool = default;
+};
+
 struct TerminalScreenSnapshot {
   std::uint16_t columns{0};
   std::uint16_t rows{0};
@@ -67,6 +104,7 @@ class TerminalMultiplexer {
 
   [[nodiscard]] auto terminal_size() const -> TerminalSize;
   [[nodiscard]] auto snapshot() const -> TerminalScreenSnapshot;
+  [[nodiscard]] auto last_semantic_change() const -> TerminalSemanticChange;
   [[nodiscard]] auto viewport_snapshot(std::string_view view_id) const
       -> std::optional<TerminalViewportSnapshot>;
 

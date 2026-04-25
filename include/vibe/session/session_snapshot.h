@@ -111,6 +111,8 @@ enum class SessionInteractionKind {
 }
 
 struct SessionSignals {
+  std::optional<std::int64_t> last_raw_output_at_unix_ms;
+  std::optional<std::int64_t> last_meaningful_output_at_unix_ms;
   std::optional<std::int64_t> last_output_at_unix_ms;
   std::optional<std::int64_t> last_activity_at_unix_ms;
   std::optional<std::int64_t> last_file_change_at_unix_ms;
@@ -125,6 +127,7 @@ struct SessionSignals {
   AttentionState attention_state{AttentionState::None};
   AttentionReason attention_reason{AttentionReason::None};
   SessionInteractionKind interaction_kind{SessionInteractionKind::Unknown};
+  TerminalSemanticChange terminal_semantic_change{};
   bool git_dirty{false};
   std::string git_branch;
   std::size_t git_modified_count{0};

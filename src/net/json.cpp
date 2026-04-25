@@ -44,6 +44,18 @@ auto ToAttentionReason(const vibe::service::SessionSummary& summary) -> const ch
   return vibe::session::ToString(summary.attention_reason).data();
 }
 
+auto MakeTerminalSemanticChangeJson(const vibe::session::TerminalSemanticChange& change) -> json::object {
+  json::object object;
+  object["kind"] = std::string(vibe::session::ToString(change.kind));
+  object["changedVisibleLineCount"] = change.changed_visible_line_count;
+  object["scrollbackLinesAdded"] = change.scrollback_lines_added;
+  object["appendedVisibleCharacterCount"] = change.appended_visible_character_count;
+  object["cursorMoved"] = change.cursor_moved;
+  object["altScreenEntered"] = change.alt_screen_entered;
+  object["altScreenExited"] = change.alt_screen_exited;
+  return object;
+}
+
 auto ToInventoryState(const vibe::service::SessionSummary& summary) -> const char* {
   if (summary.is_active) {
     return "live";
@@ -236,6 +248,12 @@ auto ToJson(const vibe::session::SessionSnapshot& snapshot) -> std::string {
   if (snapshot.signals.last_output_at_unix_ms.has_value()) {
     signals["lastOutputAtUnixMs"] = *snapshot.signals.last_output_at_unix_ms;
   }
+  if (snapshot.signals.last_raw_output_at_unix_ms.has_value()) {
+    signals["lastRawOutputAtUnixMs"] = *snapshot.signals.last_raw_output_at_unix_ms;
+  }
+  if (snapshot.signals.last_meaningful_output_at_unix_ms.has_value()) {
+    signals["lastMeaningfulOutputAtUnixMs"] = *snapshot.signals.last_meaningful_output_at_unix_ms;
+  }
   if (snapshot.signals.last_activity_at_unix_ms.has_value()) {
     signals["lastActivityAtUnixMs"] = *snapshot.signals.last_activity_at_unix_ms;
   }
@@ -263,6 +281,7 @@ auto ToJson(const vibe::session::SessionSnapshot& snapshot) -> std::string {
   signals["attentionState"] = std::string(vibe::session::ToString(snapshot.signals.attention_state));
   signals["attentionReason"] = std::string(vibe::session::ToString(snapshot.signals.attention_reason));
   signals["interactionKind"] = std::string(vibe::session::ToString(snapshot.signals.interaction_kind));
+  signals["terminalSemanticChange"] = MakeTerminalSemanticChangeJson(snapshot.signals.terminal_semantic_change);
   signals["gitDirty"] = snapshot.signals.git_dirty;
   signals["gitBranch"] = snapshot.signals.git_branch;
   signals["gitModifiedCount"] = snapshot.signals.git_modified_count;

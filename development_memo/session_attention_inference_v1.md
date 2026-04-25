@@ -183,3 +183,88 @@ A new attention rule should only ship if it is:
 - stable over time
 - equipped with a clear reason code
 - easy for clients to render
+
+## State Consolidation Plan
+
+This is the follow-on plan to reduce client-visible state sprawl while keeping richer terminal and session evidence in Core.
+
+Target principle:
+
+- keep rich evidence internal
+- derive one strengthened assessment model in Core
+- expose a smaller, more coherent client-facing state surface
+
+### Current Problems
+
+- `supervisionState`, `activityState`, `isActive`, and `interactionKind` partially overlap
+- `attentionState`, `attentionReason`, and `semanticPreview` are one concept split across multiple fields
+- new terminal semantics such as `terminalSemanticChange` are evidence, not product state, and should not become another top-level client axis
+- `SessionSummary`, `SessionSignals`, and `SessionNodeSummary` duplicate meaning in slightly different shapes
+
+### Target Layers
+
+1. Evidence layer
+- terminal screen/buffer diff
+- raw vs meaningful vs cosmetic output timing
+- stdin activity / future interaction segmentation
+- controller changes
+- file and git changes
+
+2. Assessment layer
+- one authoritative Core-owned model derived from evidence
+- includes:
+  - lifecycle mode
+  - interaction mode
+  - activity class
+  - attention level
+  - attention cause
+  - user-facing summary
+
+3. Presentation layer
+- thin client-facing API
+- clients mainly consume:
+  - mode
+  - attention
+  - summary
+- low-level evidence should be debug-only or optional
+
+### Proposed Merge Mapping
+
+- `status` -> lifecycle mode
+- `interactionKind` -> interaction mode
+- `supervisionState` + output semantics -> activity class
+- `attentionState` -> attention level
+- `attentionReason` -> attention cause
+- `semanticPreview` -> user-facing summary
+- `terminalSemanticChange` -> evidence only
+
+### Checklist
+
+- [x] Add low-level terminal semantic change detection in `TerminalMultiplexer`
+- [x] Thread terminal semantic change through Core snapshot signals
+- [ ] Define an internal session assessment model in Core
+- [ ] Refactor `SessionManager` to build current legacy fields from the assessment model
+- [ ] Separate raw output time from meaningful output time in Core evidence
+- [ ] Add stdin-driven interaction partitioning to Core evidence
+- [ ] Introduce consolidated API fields alongside legacy fields
+- [ ] Move low-level evidence to debug/diagnostic payloads
+- [ ] Deprecate redundant legacy fields after client migration
+
+### Phase 1 Scope
+
+Phase 1 should be internal-only:
+
+- build the assessment model in Core
+- keep current API fields unchanged
+- make all current legacy state derive from the new assessment path
+- add tests for merged attention/activity behavior
+
+### Phase 2 Scope
+
+Phase 2 should add new client-facing fields:
+
+- `mode`
+- `attention`
+- `summary`
+
+while keeping current legacy fields for compatibility.

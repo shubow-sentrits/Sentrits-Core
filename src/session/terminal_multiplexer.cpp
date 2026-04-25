@@ -101,6 +101,87 @@ auto BuildAppendTraceSummary(const std::string_view data) -> std::optional<std::
   return summary.str();
 }
 
+auto HasAltScreenEnter(const std::string_view data) -> bool {
+  return ContainsSequence(data, "\x1b[?1049h") || ContainsSequence(data, "\x1b[?1047h") ||
+         ContainsSequence(data, "\x1b[?47h");
+}
+
+auto HasAltScreenExit(const std::string_view data) -> bool {
+  return ContainsSequence(data, "\x1b[?1049l") || ContainsSequence(data, "\x1b[?1047l") ||
+         ContainsSequence(data, "\x1b[?47l");
+}
+
+auto IsTrivialVisibleCharacter(const char ch) -> bool {
+  switch (ch) {
+    case '.':
+    case ',':
+    case ':':
+    case ';':
+    case '\'':
+    case '"':
+    case '`':
+    case '-':
+    case '_':
+    case '=':
+    case '+':
+    case '|':
+    case '/':
+    case '\\':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case '<':
+    case '>':
+    case '*':
+    case '#':
+    case '!':
+    case '?':
+      return true;
+    default:
+      break;
+  }
+  return false;
+}
+
+auto CountVisibleTailGrowth(const std::string& before, const std::string& after) -> std::size_t {
+  if (after.size() <= before.size() || after.compare(0, before.size(), before) != 0) {
+    return 0;
+  }
+
+  std::size_t visible_count = 0;
+  for (std::size_t index = before.size(); index < after.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(after[index]);
+    if (ch < 0x20U || ch == 0x7FU) {
+      continue;
+    }
+    visible_count += 1U;
+  }
+  return visible_count;
+}
+
+auto HasOnlyTrivialTailGrowth(const std::string& before, const std::string& after) -> bool {
+  if (after.size() <= before.size() || after.compare(0, before.size(), before) != 0) {
+    return false;
+  }
+
+  bool saw_visible = false;
+  for (std::size_t index = before.size(); index < after.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(after[index]);
+    if (ch < 0x20U || ch == 0x7FU) {
+      continue;
+    }
+    saw_visible = true;
+    if (!IsTrivialVisibleCharacter(static_cast<char>(ch))) {
+      return false;
+    }
+  }
+
+  return saw_visible;
+}
+
 auto NormalizeUnicodeScalar(const uint32_t codepoint) -> uint32_t {
   if (codepoint == 0U) {
     return 0U;
@@ -352,6 +433,7 @@ class TerminalMultiplexer::Impl {
       return;
     }
 
+    const TerminalScreenSnapshot snapshot_before = snapshot_;
     const std::size_t scrollback_before = scrollback_lines_.size();
     const std::uint64_t render_revision_before = render_revision_;
     if (const auto summary = BuildAppendTraceSummary(data); summary.has_value()) {
@@ -368,18 +450,28 @@ class TerminalMultiplexer::Impl {
       dirty_ = false;
     }
 
+    last_semantic_change_ = ClassifySemanticChange(data, snapshot_before, snapshot_);
+
     std::ostringstream trace;
     trace << "bytes=" << data.size() << " scrollbackBefore=" << scrollback_before
           << " scrollbackAfter=" << scrollback_lines_.size()
           << " renderRevisionBefore=" << render_revision_before
           << " renderRevisionAfter=" << render_revision_
-          << " cursorRow=" << snapshot_.cursor_row << " cursorColumn=" << snapshot_.cursor_column;
+          << " cursorRow=" << snapshot_.cursor_row << " cursorColumn=" << snapshot_.cursor_column
+          << " semanticKind=" << static_cast<int>(last_semantic_change_.kind)
+          << " changedLines=" << last_semantic_change_.changed_visible_line_count
+          << " scrollbackAdded=" << last_semantic_change_.scrollback_lines_added
+          << " appendedChars=" << last_semantic_change_.appended_visible_character_count;
     vibe::base::DebugTrace("core.terminal", "append.state", trace.str());
   }
 
   [[nodiscard]] auto terminal_size() const -> TerminalSize { return terminal_size_; }
 
   [[nodiscard]] auto snapshot() const -> TerminalScreenSnapshot { return snapshot_; }
+
+  [[nodiscard]] auto last_semantic_change() const -> TerminalSemanticChange {
+    return last_semantic_change_;
+  }
 
   void UpdateViewport(const std::string_view view_id, const TerminalSize viewport_size) {
     if (view_id.empty()) {
@@ -488,6 +580,78 @@ class TerminalMultiplexer::Impl {
         .columns = std::max<std::uint16_t>(1, terminal_size.columns),
         .rows = std::max<std::uint16_t>(1, terminal_size.rows),
     };
+  }
+
+  [[nodiscard]] auto ClassifySemanticChange(const std::string_view data,
+                                            const TerminalScreenSnapshot& before,
+                                            const TerminalScreenSnapshot& after) const
+      -> TerminalSemanticChange {
+    TerminalSemanticChange change{
+        .kind = TerminalSemanticChangeKind::None,
+        .changed_visible_line_count = 0,
+        .scrollback_lines_added =
+            after.scrollback_lines.size() > before.scrollback_lines.size()
+                ? after.scrollback_lines.size() - before.scrollback_lines.size()
+                : 0U,
+        .appended_visible_character_count = 0,
+        .cursor_moved = before.cursor_row != after.cursor_row || before.cursor_column != after.cursor_column,
+        .alt_screen_entered = HasAltScreenEnter(data),
+        .alt_screen_exited = HasAltScreenExit(data),
+    };
+
+    const std::size_t compared_visible_lines =
+        std::max(before.visible_lines.size(), after.visible_lines.size());
+    for (std::size_t index = 0; index < compared_visible_lines; ++index) {
+      const std::string_view before_line =
+          index < before.visible_lines.size() ? std::string_view(before.visible_lines[index]) : std::string_view();
+      const std::string_view after_line =
+          index < after.visible_lines.size() ? std::string_view(after.visible_lines[index]) : std::string_view();
+      if (before_line != after_line) {
+        change.changed_visible_line_count += 1U;
+      }
+    }
+
+    const std::size_t compared_line_count =
+        std::min(before.visible_lines.size(), after.visible_lines.size());
+    for (std::size_t index = 0; index < compared_line_count; ++index) {
+      change.appended_visible_character_count +=
+          CountVisibleTailGrowth(before.visible_lines[index], after.visible_lines[index]);
+    }
+
+    if (change.alt_screen_entered || change.alt_screen_exited) {
+      change.kind = TerminalSemanticChangeKind::AltScreenTransition;
+      return change;
+    }
+
+    if (after.render_revision == before.render_revision) {
+      return change;
+    }
+
+    if (change.scrollback_lines_added > 0U) {
+      change.kind = TerminalSemanticChangeKind::MeaningfulOutput;
+      return change;
+    }
+
+    if (change.changed_visible_line_count == 0U && change.cursor_moved) {
+      change.kind = TerminalSemanticChangeKind::CursorOnly;
+      return change;
+    }
+
+    if (change.changed_visible_line_count <= 1U && change.appended_visible_character_count > 0U &&
+        change.appended_visible_character_count <= 4U) {
+      for (std::size_t index = 0; index < compared_line_count; ++index) {
+        if (HasOnlyTrivialTailGrowth(before.visible_lines[index], after.visible_lines[index])) {
+          change.kind = TerminalSemanticChangeKind::CosmeticChurn;
+          return change;
+        }
+      }
+    }
+
+    if (change.changed_visible_line_count > 0U) {
+      change.kind = TerminalSemanticChangeKind::MeaningfulOutput;
+    }
+
+    return change;
   }
 
   void RefreshSnapshot() {
@@ -824,6 +988,7 @@ class TerminalMultiplexer::Impl {
   std::deque<std::string> scrollback_lines_;
   std::unordered_map<std::string, TerminalViewportState> viewports_;
   TerminalScreenSnapshot snapshot_{};
+  TerminalSemanticChange last_semantic_change_{};
   std::uint64_t render_revision_{0};
   bool dirty_{false};
 };
@@ -845,6 +1010,10 @@ void TerminalMultiplexer::Append(const std::string_view data) { impl_->Append(da
 auto TerminalMultiplexer::terminal_size() const -> TerminalSize { return impl_->terminal_size(); }
 
 auto TerminalMultiplexer::snapshot() const -> TerminalScreenSnapshot { return impl_->snapshot(); }
+
+auto TerminalMultiplexer::last_semantic_change() const -> TerminalSemanticChange {
+  return impl_->last_semantic_change();
+}
 
 void TerminalMultiplexer::UpdateViewport(const std::string_view view_id,
                                          const TerminalSize viewport_size) {

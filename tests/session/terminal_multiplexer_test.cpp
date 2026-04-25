@@ -15,6 +15,7 @@ TEST(TerminalMultiplexerTest, TracksVisibleScreenAndScrollback) {
   EXPECT_EQ(snapshot.rows, 3);
   EXPECT_EQ(snapshot.visible_lines, (std::vector<std::string>{"two", "three", "four"}));
   EXPECT_EQ(snapshot.scrollback_lines, (std::vector<std::string>{"one"}));
+  EXPECT_EQ(multiplexer.last_semantic_change().kind, TerminalSemanticChangeKind::MeaningfulOutput);
 }
 
 TEST(TerminalMultiplexerTest, SupportsBasicCursorAndEraseSequences) {
@@ -101,6 +102,42 @@ TEST(TerminalMultiplexerTest, ViewportUsesStableHorizontalSliceWhenNarrowerThanP
   EXPECT_EQ(viewport->visible_lines.front(), "abcd");
   EXPECT_EQ(viewport->visible_lines.back(), "");
   EXPECT_FALSE(viewport->cursor_viewport_column.has_value());
+}
+
+TEST(TerminalMultiplexerTest, ClassifiesCursorMovementWithoutTextChange) {
+  TerminalMultiplexer multiplexer(TerminalSize{.columns = 8, .rows = 2}, 4);
+  multiplexer.Append("hello");
+
+  multiplexer.Append("\r");
+
+  const auto change = multiplexer.last_semantic_change();
+  EXPECT_EQ(change.kind, TerminalSemanticChangeKind::CursorOnly);
+  EXPECT_TRUE(change.cursor_moved);
+  EXPECT_EQ(change.changed_visible_line_count, 0U);
+}
+
+TEST(TerminalMultiplexerTest, ClassifiesTrivialTailGrowthAsCosmeticChurn) {
+  TerminalMultiplexer multiplexer(TerminalSize{.columns = 20, .rows = 2}, 4);
+  multiplexer.Append("thinking");
+
+  multiplexer.Append(".");
+
+  const auto change = multiplexer.last_semantic_change();
+  EXPECT_EQ(change.kind, TerminalSemanticChangeKind::CosmeticChurn);
+  EXPECT_EQ(change.changed_visible_line_count, 1U);
+  EXPECT_EQ(change.scrollback_lines_added, 0U);
+  EXPECT_EQ(change.appended_visible_character_count, 1U);
+}
+
+TEST(TerminalMultiplexerTest, ClassifiesAltScreenTransitionsSeparately) {
+  TerminalMultiplexer multiplexer(TerminalSize{.columns = 20, .rows = 4}, 4);
+
+  multiplexer.Append("\x1b[?1049h");
+
+  const auto change = multiplexer.last_semantic_change();
+  EXPECT_EQ(change.kind, TerminalSemanticChangeKind::AltScreenTransition);
+  EXPECT_TRUE(change.alt_screen_entered);
+  EXPECT_FALSE(change.alt_screen_exited);
 }
 
 }  // namespace

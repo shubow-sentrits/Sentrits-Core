@@ -35,6 +35,8 @@ TEST(SessionSnapshotTest, CarriesLightweightRecoveryState) {
           },
       .signals =
           SessionSignals{
+              .last_raw_output_at_unix_ms = 95,
+              .last_meaningful_output_at_unix_ms = 100,
               .last_output_at_unix_ms = 100,
               .last_activity_at_unix_ms = 110,
               .last_file_change_at_unix_ms = 110,
@@ -48,6 +50,16 @@ TEST(SessionSnapshotTest, CarriesLightweightRecoveryState) {
               .attention_state = AttentionState::Info,
               .attention_reason = AttentionReason::WorkspaceChanged,
               .interaction_kind = SessionInteractionKind::RunningNonInteractive,
+              .terminal_semantic_change =
+                  TerminalSemanticChange{
+                      .kind = TerminalSemanticChangeKind::MeaningfulOutput,
+                      .changed_visible_line_count = 2,
+                      .scrollback_lines_added = 1,
+                      .appended_visible_character_count = 5,
+                      .cursor_moved = true,
+                      .alt_screen_entered = false,
+                      .alt_screen_exited = false,
+                  },
               .git_dirty = true,
               .git_branch = "main",
               .git_modified_count = 1,
@@ -89,6 +101,8 @@ TEST(SessionSnapshotTest, CarriesLightweightRecoveryState) {
   EXPECT_EQ(snapshot.terminal_screen->scrollback_lines, (std::vector<std::string>{"Booting"}));
   EXPECT_EQ(snapshot.terminal_screen->bootstrap_ansi, "\x1b[2J\x1b[HRunning tests...\x1b[EDone.");
   EXPECT_EQ(snapshot.signals.last_output_at_unix_ms, std::optional<std::int64_t>{100});
+  EXPECT_EQ(snapshot.signals.last_raw_output_at_unix_ms, std::optional<std::int64_t>{95});
+  EXPECT_EQ(snapshot.signals.last_meaningful_output_at_unix_ms, std::optional<std::int64_t>{100});
   EXPECT_EQ(snapshot.signals.last_activity_at_unix_ms, std::optional<std::int64_t>{110});
   EXPECT_EQ(snapshot.signals.last_file_change_at_unix_ms, std::optional<std::int64_t>{110});
   EXPECT_EQ(snapshot.signals.last_git_change_at_unix_ms, std::optional<std::int64_t>{111});
@@ -99,6 +113,8 @@ TEST(SessionSnapshotTest, CarriesLightweightRecoveryState) {
   EXPECT_EQ(snapshot.signals.supervision_state, SupervisionState::Quiet);
   EXPECT_EQ(snapshot.signals.attention_state, AttentionState::Info);
   EXPECT_EQ(snapshot.signals.attention_reason, AttentionReason::WorkspaceChanged);
+  EXPECT_EQ(snapshot.signals.terminal_semantic_change.kind, TerminalSemanticChangeKind::MeaningfulOutput);
+  EXPECT_EQ(snapshot.signals.terminal_semantic_change.scrollback_lines_added, 1U);
   EXPECT_TRUE(snapshot.signals.git_dirty);
   EXPECT_EQ(snapshot.signals.git_branch, "main");
   EXPECT_EQ(snapshot.signals.git_modified_count, 1U);
@@ -143,6 +159,8 @@ TEST(SessionSnapshotTest, DefaultsToEmptyOptionalCollections) {
   EXPECT_TRUE(snapshot.recent_terminal_tail.empty());
   EXPECT_FALSE(snapshot.terminal_screen.has_value());
   EXPECT_FALSE(snapshot.signals.last_output_at_unix_ms.has_value());
+  EXPECT_FALSE(snapshot.signals.last_raw_output_at_unix_ms.has_value());
+  EXPECT_FALSE(snapshot.signals.last_meaningful_output_at_unix_ms.has_value());
   EXPECT_FALSE(snapshot.signals.last_activity_at_unix_ms.has_value());
   EXPECT_FALSE(snapshot.signals.last_file_change_at_unix_ms.has_value());
   EXPECT_FALSE(snapshot.signals.last_git_change_at_unix_ms.has_value());
@@ -154,6 +172,7 @@ TEST(SessionSnapshotTest, DefaultsToEmptyOptionalCollections) {
   EXPECT_EQ(snapshot.signals.attention_state, AttentionState::None);
   EXPECT_EQ(snapshot.signals.attention_reason, AttentionReason::None);
   EXPECT_EQ(snapshot.signals.interaction_kind, SessionInteractionKind::Unknown);
+  EXPECT_EQ(snapshot.signals.terminal_semantic_change.kind, TerminalSemanticChangeKind::None);
   EXPECT_FALSE(snapshot.signals.git_dirty);
   EXPECT_TRUE(snapshot.signals.git_branch.empty());
   EXPECT_EQ(snapshot.signals.git_modified_count, 0U);

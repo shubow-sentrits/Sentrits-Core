@@ -202,6 +202,8 @@ TEST(SessionRuntimeTest, PollOnceAppendsOutputAndUpdatesSnapshotTail) {
   EXPECT_EQ(runtime.record().snapshot().recent_terminal_tail, "chunk-one");
   ASSERT_TRUE(runtime.record().snapshot().terminal_screen.has_value());
   EXPECT_EQ(runtime.record().snapshot().terminal_screen->visible_lines.front(), "chunk-one");
+  EXPECT_EQ(runtime.record().snapshot().signals.terminal_semantic_change.kind,
+            TerminalSemanticChangeKind::MeaningfulOutput);
 }
 
 TEST(SessionRuntimeTest, PollOnceDrainsAvailableOutputBeforeReturning) {
@@ -223,6 +225,8 @@ TEST(SessionRuntimeTest, PollOnceDrainsAvailableOutputBeforeReturning) {
   EXPECT_EQ(runtime.record().snapshot().recent_terminal_tail, "chunk-onechunk-two");
   ASSERT_TRUE(runtime.record().snapshot().terminal_screen.has_value());
   EXPECT_EQ(runtime.record().snapshot().terminal_screen->visible_lines.front(), "chunk-onechunk-two");
+  EXPECT_EQ(runtime.record().snapshot().signals.terminal_semantic_change.kind,
+            TerminalSemanticChangeKind::MeaningfulOutput);
   EXPECT_EQ(pty_process.read_count, 3);
 }
 

@@ -31,6 +31,10 @@ void SessionRecord::SetTerminalScreen(TerminalScreenSnapshot terminal_screen) {
   terminal_screen_ = std::move(terminal_screen);
 }
 
+void SessionRecord::SetLastTerminalSemanticChange(TerminalSemanticChange terminal_semantic_change) {
+  terminal_semantic_change_ = std::move(terminal_semantic_change);
+}
+
 void SessionRecord::SetRecentFileChanges(std::vector<std::string> recent_file_changes) {
   recent_file_changes_ = std::move(recent_file_changes);
 }
@@ -49,6 +53,8 @@ auto SessionRecord::snapshot() const -> SessionSnapshot {
       .terminal_screen = terminal_screen_,
       .signals =
           SessionSignals{
+              .last_raw_output_at_unix_ms = std::nullopt,
+              .last_meaningful_output_at_unix_ms = std::nullopt,
               .last_output_at_unix_ms = std::nullopt,
               .last_activity_at_unix_ms = std::nullopt,
               .last_file_change_at_unix_ms = std::nullopt,
@@ -62,6 +68,7 @@ auto SessionRecord::snapshot() const -> SessionSnapshot {
               .attention_state = AttentionState::None,
               .attention_reason = AttentionReason::None,
               .interaction_kind = SessionInteractionKind::Unknown,
+              .terminal_semantic_change = terminal_semantic_change_,
               .git_dirty = !git_summary_.modified_files.empty() || !git_summary_.staged_files.empty() ||
                            !git_summary_.untracked_files.empty(),
               .git_branch = git_summary_.branch,

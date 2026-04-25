@@ -173,6 +173,8 @@ class SessionManager {
     bool is_recovered{false};
     std::optional<std::int64_t> created_at_unix_ms;
     std::optional<std::int64_t> last_status_at_unix_ms;
+    std::optional<std::int64_t> last_raw_output_at_unix_ms;
+    std::optional<std::int64_t> last_meaningful_output_at_unix_ms;
     std::optional<std::int64_t> last_output_at_unix_ms;
     std::optional<std::int64_t> last_activity_at_unix_ms;
     std::optional<std::int64_t> last_file_change_at_unix_ms;

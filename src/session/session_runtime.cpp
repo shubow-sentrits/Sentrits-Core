@@ -180,6 +180,7 @@ void SessionRuntime::PollOnce(const int read_timeout_ms) {
       record_.SetCurrentSequence(output_buffer_.next_sequence() - 1);
       record_.SetRecentTerminalTail(output_buffer_.Tail(64U * 1024U).data);
       record_.SetTerminalScreen(terminal_multiplexer_.snapshot());
+      record_.SetLastTerminalSemanticChange(terminal_multiplexer_.last_semantic_change());
       debug_recorder_.RecordPtyOutput(read_result.data, record_.snapshot().current_sequence,
                                       *record_.snapshot().terminal_screen);
     }

@@ -689,14 +689,14 @@ auto BuildSemanticPreview(const vibe::session::SessionStatus status,
 }
 
 auto BuildNodeSummary(const vibe::session::SessionSnapshot& snapshot,
-                      const vibe::session::SessionSignals& signals) -> vibe::session::SessionNodeSummary {
+                      const vibe::session::SessionSignals& signals,
+                      const std::string& summary_text) -> vibe::session::SessionNodeSummary {
   return vibe::session::SessionNodeSummary{
       .session_id = snapshot.metadata.id.value(),
       .lifecycle_status = snapshot.metadata.status,
       .interaction_kind = signals.interaction_kind,
       .attention_state = signals.attention_state,
-      .semantic_preview = BuildSemanticPreview(snapshot.metadata.status, signals.attention_reason,
-                                               signals.git_dirty),
+      .semantic_preview = summary_text,
       .recent_file_change_count = snapshot.recent_file_changes.size(),
       .git_dirty = signals.git_dirty,
       .last_activity_at_unix_ms = signals.last_activity_at_unix_ms,
@@ -717,6 +717,107 @@ auto BuildNodeSummaryTraceKey(const vibe::service::SessionSummary& summary) -> s
     stream << " lastActivityAt=" << *summary.last_activity_at_unix_ms;
   }
   return stream.str();
+}
+
+enum class AssessmentActivityClass {
+  Idle,
+  MeaningfulOutput,
+  CosmeticOutput,
+  ExternalChange,
+  Stopped,
+};
+
+struct AttentionAssessment {
+  vibe::session::AttentionState state{vibe::session::AttentionState::None};
+  vibe::session::AttentionReason reason{vibe::session::AttentionReason::None};
+  std::optional<std::int64_t> since_unix_ms;
+  std::string summary;
+};
+
+struct SessionAssessment {
+  vibe::session::SupervisionState supervision_state{vibe::session::SupervisionState::Quiet};
+  vibe::session::SessionInteractionKind interaction_kind{
+      vibe::session::SessionInteractionKind::Unknown};
+  AssessmentActivityClass activity_class{AssessmentActivityClass::Idle};
+  AttentionAssessment attention{};
+};
+
+auto InferActivityClass(const vibe::session::SessionStatus status,
+                        const std::optional<std::int64_t> last_output_at_unix_ms,
+                        const std::optional<std::int64_t> last_activity_at_unix_ms,
+                        const vibe::session::TerminalSemanticChange& terminal_semantic_change,
+                        const std::int64_t now_unix_ms) -> AssessmentActivityClass {
+  using vibe::session::SessionStatus;
+  using vibe::session::TerminalSemanticChangeKind;
+
+  if (status == SessionStatus::Exited || status == SessionStatus::Error) {
+    return AssessmentActivityClass::Stopped;
+  }
+
+  if (last_activity_at_unix_ms.has_value()) {
+    const bool recent_activity = now_unix_ms - *last_activity_at_unix_ms <= kRecentOutputWindowMs;
+    if (recent_activity) {
+      switch (terminal_semantic_change.kind) {
+        case TerminalSemanticChangeKind::CosmeticChurn:
+        case TerminalSemanticChangeKind::CursorOnly:
+          return AssessmentActivityClass::CosmeticOutput;
+        case TerminalSemanticChangeKind::AltScreenTransition:
+          return AssessmentActivityClass::ExternalChange;
+        case TerminalSemanticChangeKind::MeaningfulOutput:
+          return AssessmentActivityClass::MeaningfulOutput;
+        case TerminalSemanticChangeKind::None:
+          break;
+      }
+    }
+  }
+
+  if (last_output_at_unix_ms.has_value() && now_unix_ms - *last_output_at_unix_ms <= kRecentOutputWindowMs) {
+    return AssessmentActivityClass::MeaningfulOutput;
+  }
+
+  return AssessmentActivityClass::Idle;
+}
+
+auto BuildAssessmentSummary(const vibe::session::SessionStatus status,
+                            const vibe::session::AttentionReason attention_reason,
+                            const bool git_dirty,
+                            const AssessmentActivityClass /*activity_class*/) -> std::string {
+  return BuildSemanticPreview(status, attention_reason, git_dirty);
+}
+
+auto BuildAssessment(const vibe::session::SessionStatus status,
+                     const vibe::session::ControllerKind controller_kind,
+                     const std::uint64_t current_sequence,
+                     const std::optional<std::int64_t> last_status_at_unix_ms,
+                     const std::optional<std::int64_t> last_meaningful_output_at_unix_ms,
+                     const std::optional<std::int64_t> last_activity_at_unix_ms,
+                     const std::optional<std::int64_t> last_file_change_at_unix_ms,
+                     const std::optional<std::int64_t> last_git_change_at_unix_ms,
+                     const std::optional<std::int64_t> last_controller_change_at_unix_ms,
+                     const vibe::session::TerminalSemanticChange& terminal_semantic_change,
+                     const bool git_dirty, const std::int64_t now_unix_ms) -> SessionAssessment {
+  const auto attention = InferAttention(status, last_status_at_unix_ms, last_file_change_at_unix_ms,
+                                        last_git_change_at_unix_ms, last_controller_change_at_unix_ms,
+                                        now_unix_ms);
+  const auto interaction_kind = InferInteractionKind(status, controller_kind, current_sequence);
+  const auto supervision_state =
+      InferSupervisionState(status, last_meaningful_output_at_unix_ms, now_unix_ms);
+  const auto activity_class =
+      InferActivityClass(status, last_meaningful_output_at_unix_ms, last_activity_at_unix_ms,
+                         terminal_semantic_change, now_unix_ms);
+
+  return SessionAssessment{
+      .supervision_state = supervision_state,
+      .interaction_kind = interaction_kind,
+      .activity_class = activity_class,
+      .attention =
+          AttentionAssessment{
+              .state = attention.state,
+              .reason = attention.reason,
+              .since_unix_ms = attention.since_unix_ms,
+              .summary = BuildAssessmentSummary(status, attention.reason, git_dirty, activity_class),
+          },
+  };
 }
 
 }  // namespace
@@ -872,6 +973,8 @@ auto SessionManager::CreateSession(const CreateSessionRequest& request)
       .is_recovered = false,
       .created_at_unix_ms = now_unix_ms,
       .last_status_at_unix_ms = now_unix_ms,
+      .last_raw_output_at_unix_ms = std::nullopt,
+      .last_meaningful_output_at_unix_ms = std::nullopt,
       .last_output_at_unix_ms = std::nullopt,
       .last_activity_at_unix_ms = now_unix_ms,
       .last_file_change_at_unix_ms = std::nullopt,
@@ -945,6 +1048,8 @@ auto SessionManager::LoadPersistedSessions() -> std::size_t {
         .terminal_screen = std::nullopt,
         .signals =
             vibe::session::SessionSignals{
+                .last_raw_output_at_unix_ms = std::nullopt,
+                .last_meaningful_output_at_unix_ms = std::nullopt,
                 .last_output_at_unix_ms = std::nullopt,
                 .last_activity_at_unix_ms = std::nullopt,
                 .last_file_change_at_unix_ms = std::nullopt,
@@ -989,6 +1094,8 @@ auto SessionManager::LoadPersistedSessions() -> std::size_t {
         .is_recovered = true,
         .created_at_unix_ms = std::nullopt,
         .last_status_at_unix_ms = std::nullopt,
+        .last_raw_output_at_unix_ms = std::nullopt,
+        .last_meaningful_output_at_unix_ms = std::nullopt,
         .last_output_at_unix_ms = std::nullopt,
         .last_activity_at_unix_ms = std::nullopt,
         .last_file_change_at_unix_ms = std::nullopt,
@@ -1037,65 +1144,73 @@ auto SessionManager::GetSnapshot(const std::string& session_id) const
   if (const SessionEntry* entry = FindEntry(session_id); entry != nullptr) {
     if (entry->runtime) {
       auto snapshot = entry->runtime->record().snapshot();
-      const auto attention = InferAttention(snapshot.metadata.status, entry->last_status_at_unix_ms,
-                                            entry->last_file_change_at_unix_ms,
-                                            entry->last_git_change_at_unix_ms,
-                                            entry->last_controller_change_at_unix_ms, now_unix_ms);
+      const auto assessment = BuildAssessment(
+          snapshot.metadata.status, entry->controller_kind, snapshot.current_sequence,
+          entry->last_status_at_unix_ms, entry->last_meaningful_output_at_unix_ms,
+          entry->last_activity_at_unix_ms,
+          entry->last_file_change_at_unix_ms, entry->last_git_change_at_unix_ms,
+          entry->last_controller_change_at_unix_ms, snapshot.signals.terminal_semantic_change,
+          IsGitDirty(snapshot.git_summary), now_unix_ms);
       snapshot.signals = vibe::session::SessionSignals{
+          .last_raw_output_at_unix_ms = entry->last_raw_output_at_unix_ms,
+          .last_meaningful_output_at_unix_ms = entry->last_meaningful_output_at_unix_ms,
           .last_output_at_unix_ms = entry->last_output_at_unix_ms,
           .last_activity_at_unix_ms = entry->last_activity_at_unix_ms,
           .last_file_change_at_unix_ms = entry->last_file_change_at_unix_ms,
           .last_git_change_at_unix_ms = entry->last_git_change_at_unix_ms,
           .last_controller_change_at_unix_ms = entry->last_controller_change_at_unix_ms,
-          .attention_since_unix_ms = attention.since_unix_ms,
+          .attention_since_unix_ms = assessment.attention.since_unix_ms,
           .pty_columns = entry->current_terminal_size.columns,
           .pty_rows = entry->current_terminal_size.rows,
           .current_sequence = snapshot.current_sequence,
           .recent_file_change_count = snapshot.recent_file_changes.size(),
-          .supervision_state =
-              InferSupervisionState(snapshot.metadata.status, entry->last_output_at_unix_ms, now_unix_ms),
-          .attention_state = attention.state,
-          .attention_reason = attention.reason,
-          .interaction_kind = InferInteractionKind(snapshot.metadata.status, entry->controller_kind,
-                                                   snapshot.current_sequence),
+          .supervision_state = assessment.supervision_state,
+          .attention_state = assessment.attention.state,
+          .attention_reason = assessment.attention.reason,
+          .interaction_kind = assessment.interaction_kind,
+          .terminal_semantic_change = snapshot.signals.terminal_semantic_change,
           .git_dirty = IsGitDirty(snapshot.git_summary),
           .git_branch = snapshot.git_summary.branch,
           .git_modified_count = GitModifiedCount(snapshot.git_summary),
           .git_staged_count = GitStagedCount(snapshot.git_summary),
           .git_untracked_count = GitUntrackedCount(snapshot.git_summary),
       };
-      snapshot.node_summary = BuildNodeSummary(snapshot, snapshot.signals);
+      snapshot.node_summary = BuildNodeSummary(snapshot, snapshot.signals, assessment.attention.summary);
       return snapshot;
     }
     auto snapshot = *entry->recovered_snapshot;
-    const auto attention = InferAttention(snapshot.metadata.status, entry->last_status_at_unix_ms,
-                                          entry->last_file_change_at_unix_ms,
-                                          entry->last_git_change_at_unix_ms,
-                                          entry->last_controller_change_at_unix_ms, now_unix_ms);
+    const auto assessment = BuildAssessment(
+        snapshot.metadata.status, entry->controller_kind, snapshot.current_sequence,
+        entry->last_status_at_unix_ms, entry->last_meaningful_output_at_unix_ms,
+        entry->last_activity_at_unix_ms,
+        entry->last_file_change_at_unix_ms, entry->last_git_change_at_unix_ms,
+        entry->last_controller_change_at_unix_ms, snapshot.signals.terminal_semantic_change,
+        IsGitDirty(snapshot.git_summary), now_unix_ms);
     snapshot.signals = vibe::session::SessionSignals{
+        .last_raw_output_at_unix_ms = entry->last_raw_output_at_unix_ms,
+        .last_meaningful_output_at_unix_ms = entry->last_meaningful_output_at_unix_ms,
         .last_output_at_unix_ms = entry->last_output_at_unix_ms,
         .last_activity_at_unix_ms = entry->last_activity_at_unix_ms,
         .last_file_change_at_unix_ms = entry->last_file_change_at_unix_ms,
         .last_git_change_at_unix_ms = entry->last_git_change_at_unix_ms,
         .last_controller_change_at_unix_ms = entry->last_controller_change_at_unix_ms,
-        .attention_since_unix_ms = attention.since_unix_ms,
+        .attention_since_unix_ms = assessment.attention.since_unix_ms,
         .pty_columns = entry->current_terminal_size.columns,
         .pty_rows = entry->current_terminal_size.rows,
         .current_sequence = snapshot.current_sequence,
         .recent_file_change_count = snapshot.recent_file_changes.size(),
-        .supervision_state =
-            InferSupervisionState(snapshot.metadata.status, entry->last_output_at_unix_ms, now_unix_ms),
-        .attention_state = attention.state,
-        .attention_reason = attention.reason,
-        .interaction_kind = InferInteractionKind(snapshot.metadata.status, entry->controller_kind,
-                                                 snapshot.current_sequence),
+        .supervision_state = assessment.supervision_state,
+        .attention_state = assessment.attention.state,
+        .attention_reason = assessment.attention.reason,
+        .interaction_kind = assessment.interaction_kind,
+        .terminal_semantic_change = snapshot.signals.terminal_semantic_change,
         .git_dirty = IsGitDirty(snapshot.git_summary),
         .git_branch = snapshot.git_summary.branch,
         .git_modified_count = GitModifiedCount(snapshot.git_summary),
         .git_staged_count = GitStagedCount(snapshot.git_summary),
         .git_untracked_count = GitUntrackedCount(snapshot.git_summary),
     };
-    snapshot.node_summary = BuildNodeSummary(snapshot, snapshot.signals);
+    snapshot.node_summary = BuildNodeSummary(snapshot, snapshot.signals, assessment.attention.summary);
     return snapshot;
   }
 
@@ -1575,7 +1690,18 @@ auto SessionManager::PollSession(const std::string& session_id, const int read_t
         entry->runtime->output_buffer().SliceFromSequence(previous_sequence > 0 ? previous_sequence + 1 : 1);
     entry->last_observed_sequence = snapshot.current_sequence;
     entry->last_activity_at_unix_ms = now_unix_ms;
-    if (!IsCosmeticTerminalOutput(output_since.data)) {
+    entry->last_raw_output_at_unix_ms = now_unix_ms;
+
+    const bool semantic_meaningful =
+        snapshot.signals.terminal_semantic_change.kind == vibe::session::TerminalSemanticChangeKind::MeaningfulOutput ||
+        snapshot.signals.terminal_semantic_change.kind ==
+            vibe::session::TerminalSemanticChangeKind::AltScreenTransition;
+    const bool fallback_meaningful =
+        !IsCosmeticTerminalOutput(output_since.data) &&
+        snapshot.signals.terminal_semantic_change.kind != vibe::session::TerminalSemanticChangeKind::CosmeticChurn &&
+        snapshot.signals.terminal_semantic_change.kind != vibe::session::TerminalSemanticChangeKind::CursorOnly;
+    if (semantic_meaningful || fallback_meaningful) {
+      entry->last_meaningful_output_at_unix_ms = now_unix_ms;
       entry->last_output_at_unix_ms = now_unix_ms;
     }
     ServerTraceLogger::Instance().Log(
@@ -1654,18 +1780,15 @@ void SessionManager::PollAll(const int read_timeout_ms) {
 
 auto SessionManager::BuildSummary(const SessionEntry& entry) const -> SessionSummary {
   const auto now_unix_ms = CurrentUnixTimeMs();
-  const auto attention = InferAttention(entry.runtime ? entry.runtime->record().metadata().status
-                                                      : entry.recovered_snapshot->metadata.status,
-                                        entry.last_status_at_unix_ms, entry.last_file_change_at_unix_ms,
-                                        entry.last_git_change_at_unix_ms,
-                                        entry.last_controller_change_at_unix_ms, now_unix_ms);
   if (entry.runtime) {
     const auto snapshot = entry.runtime->record().snapshot();
     const auto& metadata = snapshot.metadata;
-    const auto interaction_kind =
-        InferInteractionKind(metadata.status, entry.controller_kind, snapshot.current_sequence);
-    const auto semantic_preview =
-        BuildSemanticPreview(metadata.status, attention.reason, IsGitDirty(snapshot.git_summary));
+    const auto assessment = BuildAssessment(
+        metadata.status, entry.controller_kind, snapshot.current_sequence, entry.last_status_at_unix_ms,
+        entry.last_meaningful_output_at_unix_ms, entry.last_activity_at_unix_ms,
+        entry.last_file_change_at_unix_ms,
+        entry.last_git_change_at_unix_ms, entry.last_controller_change_at_unix_ms,
+        snapshot.signals.terminal_semantic_change, IsGitDirty(snapshot.git_summary), now_unix_ms);
     return SessionSummary{
         .id = metadata.id,
         .provider = metadata.provider,
@@ -1678,10 +1801,9 @@ auto SessionManager::BuildSummary(const SessionEntry& entry) const -> SessionSum
         .controller_kind = entry.controller_kind,
         .is_recovered = entry.is_recovered,
         .is_active = IsInteractiveStatus(metadata.status),
-        .supervision_state =
-            InferSupervisionState(metadata.status, entry.last_output_at_unix_ms, now_unix_ms),
-        .attention_state = attention.state,
-        .attention_reason = attention.reason,
+        .supervision_state = assessment.supervision_state,
+        .attention_state = assessment.attention.state,
+        .attention_reason = assessment.attention.reason,
         .created_at_unix_ms = entry.created_at_unix_ms,
         .last_status_at_unix_ms = entry.last_status_at_unix_ms,
         .last_output_at_unix_ms = entry.last_output_at_unix_ms,
@@ -1689,20 +1811,20 @@ auto SessionManager::BuildSummary(const SessionEntry& entry) const -> SessionSum
         .last_file_change_at_unix_ms = entry.last_file_change_at_unix_ms,
         .last_git_change_at_unix_ms = entry.last_git_change_at_unix_ms,
         .last_controller_change_at_unix_ms = entry.last_controller_change_at_unix_ms,
-        .attention_since_unix_ms = attention.since_unix_ms,
+        .attention_since_unix_ms = assessment.attention.since_unix_ms,
         .pty_columns = entry.current_terminal_size.columns,
         .pty_rows = entry.current_terminal_size.rows,
         .current_sequence = snapshot.current_sequence,
         .recent_file_change_count = snapshot.recent_file_changes.size(),
-        .interaction_kind = interaction_kind,
-        .semantic_preview = semantic_preview,
+        .interaction_kind = assessment.interaction_kind,
+        .semantic_preview = assessment.attention.summary,
         .node_summary =
             vibe::session::SessionNodeSummary{
                 .session_id = metadata.id.value(),
                 .lifecycle_status = metadata.status,
-                .interaction_kind = interaction_kind,
-                .attention_state = attention.state,
-                .semantic_preview = semantic_preview,
+                .interaction_kind = assessment.interaction_kind,
+                .attention_state = assessment.attention.state,
+                .semantic_preview = assessment.attention.summary,
                 .recent_file_change_count = snapshot.recent_file_changes.size(),
                 .git_dirty = IsGitDirty(snapshot.git_summary),
                 .last_activity_at_unix_ms = entry.last_activity_at_unix_ms,
@@ -1717,10 +1839,12 @@ auto SessionManager::BuildSummary(const SessionEntry& entry) const -> SessionSum
 
   const auto& snapshot = *entry.recovered_snapshot;
   const auto& metadata = snapshot.metadata;
-  const auto interaction_kind =
-      InferInteractionKind(metadata.status, entry.controller_kind, snapshot.current_sequence);
-  const auto semantic_preview =
-      BuildSemanticPreview(metadata.status, attention.reason, IsGitDirty(snapshot.git_summary));
+  const auto assessment = BuildAssessment(
+      metadata.status, entry.controller_kind, snapshot.current_sequence, entry.last_status_at_unix_ms,
+      entry.last_meaningful_output_at_unix_ms, entry.last_activity_at_unix_ms,
+      entry.last_file_change_at_unix_ms,
+      entry.last_git_change_at_unix_ms, entry.last_controller_change_at_unix_ms,
+      snapshot.signals.terminal_semantic_change, IsGitDirty(snapshot.git_summary), now_unix_ms);
   return SessionSummary{
       .id = metadata.id,
       .provider = metadata.provider,
@@ -1733,9 +1857,9 @@ auto SessionManager::BuildSummary(const SessionEntry& entry) const -> SessionSum
       .controller_kind = entry.controller_kind,
       .is_recovered = entry.is_recovered,
       .is_active = IsInteractiveStatus(metadata.status),
-      .supervision_state = InferSupervisionState(metadata.status, entry.last_output_at_unix_ms, now_unix_ms),
-      .attention_state = attention.state,
-      .attention_reason = attention.reason,
+      .supervision_state = assessment.supervision_state,
+      .attention_state = assessment.attention.state,
+      .attention_reason = assessment.attention.reason,
       .created_at_unix_ms = entry.created_at_unix_ms,
       .last_status_at_unix_ms = entry.last_status_at_unix_ms,
       .last_output_at_unix_ms = entry.last_output_at_unix_ms,
@@ -1743,20 +1867,20 @@ auto SessionManager::BuildSummary(const SessionEntry& entry) const -> SessionSum
       .last_file_change_at_unix_ms = entry.last_file_change_at_unix_ms,
       .last_git_change_at_unix_ms = entry.last_git_change_at_unix_ms,
       .last_controller_change_at_unix_ms = entry.last_controller_change_at_unix_ms,
-      .attention_since_unix_ms = attention.since_unix_ms,
+      .attention_since_unix_ms = assessment.attention.since_unix_ms,
       .pty_columns = entry.current_terminal_size.columns,
       .pty_rows = entry.current_terminal_size.rows,
       .current_sequence = snapshot.current_sequence,
       .recent_file_change_count = snapshot.recent_file_changes.size(),
-      .interaction_kind = interaction_kind,
-      .semantic_preview = semantic_preview,
+      .interaction_kind = assessment.interaction_kind,
+      .semantic_preview = assessment.attention.summary,
       .node_summary =
           vibe::session::SessionNodeSummary{
               .session_id = metadata.id.value(),
               .lifecycle_status = metadata.status,
-              .interaction_kind = interaction_kind,
-              .attention_state = attention.state,
-              .semantic_preview = semantic_preview,
+              .interaction_kind = assessment.interaction_kind,
+              .attention_state = assessment.attention.state,
+              .semantic_preview = assessment.attention.summary,
               .recent_file_change_count = snapshot.recent_file_changes.size(),
               .git_dirty = IsGitDirty(snapshot.git_summary),
               .last_activity_at_unix_ms = entry.last_activity_at_unix_ms,
@@ -1830,6 +1954,10 @@ void SessionManager::RecordCreateFailureSession(
       .recent_terminal_tail = failure_log,
       .terminal_screen = std::nullopt,
       .signals = vibe::session::SessionSignals{
+          .last_raw_output_at_unix_ms = failure_log.empty() ? std::nullopt
+                                                            : std::optional<std::int64_t>(now_unix_ms),
+          .last_meaningful_output_at_unix_ms = failure_log.empty() ? std::nullopt
+                                                                   : std::optional<std::int64_t>(now_unix_ms),
           .last_output_at_unix_ms = failure_log.empty() ? std::nullopt : std::optional<std::int64_t>(now_unix_ms),
           .last_activity_at_unix_ms = now_unix_ms,
           .last_file_change_at_unix_ms = std::nullopt,
@@ -1877,6 +2005,10 @@ void SessionManager::RecordCreateFailureSession(
       .is_recovered = false,
       .created_at_unix_ms = now_unix_ms,
       .last_status_at_unix_ms = now_unix_ms,
+      .last_raw_output_at_unix_ms = failure_log.empty() ? std::nullopt
+                                                        : std::optional<std::int64_t>(now_unix_ms),
+      .last_meaningful_output_at_unix_ms = failure_log.empty() ? std::nullopt
+                                                               : std::optional<std::int64_t>(now_unix_ms),
       .last_output_at_unix_ms = failure_log.empty() ? std::nullopt : std::optional<std::int64_t>(now_unix_ms),
       .last_activity_at_unix_ms = now_unix_ms,
       .last_file_change_at_unix_ms = std::nullopt,
