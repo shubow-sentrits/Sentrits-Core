@@ -5,6 +5,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -272,6 +273,8 @@ class SessionManager {
   vibe::store::HostConfigStore* host_config_store_{nullptr};
   PtyProcessFactory pty_process_factory_;
   vibe::session::BootstrappedEnvCache env_cache_;
+  // Narrow MVP guard for managed log sessions. PTY/runtime paths remain on their existing threading model.
+  mutable std::mutex log_mutex_;
   std::vector<SessionEntry> sessions_;
   int poll_count_{0};
   std::string last_create_error_message_;

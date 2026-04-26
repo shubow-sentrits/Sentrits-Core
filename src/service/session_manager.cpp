@@ -1100,6 +1100,7 @@ auto SessionManager::last_create_error_session_id() const -> const std::optional
 
 auto SessionManager::CreateLogSession(const LogSessionCreateRequest& request)
     -> std::optional<SessionSummary> {
+  std::lock_guard lock(log_mutex_);
   last_create_error_message_.clear();
   last_create_error_session_id_.reset();
   const auto session_id = MakeSessionId();
@@ -1165,6 +1166,7 @@ auto SessionManager::CreateLogSession(const LogSessionCreateRequest& request)
 auto SessionManager::AppendLogStdout(const std::string& session_id,
                                      std::string data,
                                      const std::int64_t timestamp_unix_ms) -> bool {
+  std::lock_guard lock(log_mutex_);
   SessionEntry* entry = FindEntry(session_id);
   if (entry == nullptr || entry->log_buffer == nullptr) {
     return false;
@@ -1180,6 +1182,7 @@ auto SessionManager::AppendLogStdout(const std::string& session_id,
 auto SessionManager::AppendLogStderr(const std::string& session_id,
                                      std::string data,
                                      const std::int64_t timestamp_unix_ms) -> bool {
+  std::lock_guard lock(log_mutex_);
   SessionEntry* entry = FindEntry(session_id);
   if (entry == nullptr || entry->log_buffer == nullptr) {
     return false;
@@ -1577,6 +1580,7 @@ auto SessionManager::ReadFile(const std::string& session_id, const std::string& 
 auto SessionManager::TailEvidence(const std::string& session_id,
                                   const EvidenceTailOptions& options) const
     -> std::optional<EvidenceResult> {
+  std::lock_guard lock(log_mutex_);
   const SessionEntry* entry = FindEntry(session_id);
   if (entry == nullptr || entry->log_buffer == nullptr) {
     return std::nullopt;
@@ -1594,6 +1598,7 @@ auto SessionManager::TailEvidence(const std::string& session_id,
 auto SessionManager::RangeEvidence(const std::string& session_id,
                                    const EvidenceRangeOptions& options) const
     -> std::optional<EvidenceResult> {
+  std::lock_guard lock(log_mutex_);
   const SessionEntry* entry = FindEntry(session_id);
   if (entry == nullptr || entry->log_buffer == nullptr) {
     return std::nullopt;
@@ -1615,6 +1620,7 @@ auto SessionManager::RangeEvidence(const std::string& session_id,
 auto SessionManager::SearchEvidence(const std::string& session_id,
                                     const EvidenceSearchOptions& options) const
     -> std::optional<EvidenceResult> {
+  std::lock_guard lock(log_mutex_);
   const SessionEntry* entry = FindEntry(session_id);
   if (entry == nullptr || entry->log_buffer == nullptr) {
     return std::nullopt;
@@ -1636,6 +1642,7 @@ auto SessionManager::SearchEvidence(const std::string& session_id,
 auto SessionManager::ContextEvidence(const std::string& session_id,
                                      const EvidenceContextOptions& options) const
     -> std::optional<EvidenceResult> {
+  std::lock_guard lock(log_mutex_);
   const SessionEntry* entry = FindEntry(session_id);
   if (entry == nullptr || entry->log_buffer == nullptr) {
     return std::nullopt;
