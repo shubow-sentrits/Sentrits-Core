@@ -38,6 +38,7 @@
 #include "vibe/net/json.h"
 #include "vibe/net/local_auth.h"
 #include "vibe/net/request_parsing.h"
+#include "vibe/net/hub_control_channel.h"
 #include "vibe/net/websocket_shared.h"
 
 namespace vibe::net {
@@ -471,14 +472,16 @@ class WebSocketSession final : public WebSocketSessionBase,
                    const vibe::auth::Authorizer& authorizer,
                    std::shared_ptr<WebSocketRegistry> websocket_registry,
                    const std::string& client_address, const bool is_local_request,
-                   const ListenerRole listener_role)
+                   const ListenerRole listener_role,
+                   RelayTokenStore* relay_token_store = nullptr)
       : websocket_(std::forward<Stream>(stream)),
         session_manager_(session_manager),
         authorizer_(authorizer),
         websocket_registry_(std::move(websocket_registry)),
         client_address_(client_address),
         is_local_request_(is_local_request),
-        listener_role_(listener_role) {}
+        listener_role_(listener_role),
+        relay_token_store_(relay_token_store) {}
 
   void Start(HttpRequest request) override {
     target_ = std::string(request.target());
@@ -491,6 +494,30 @@ class WebSocketSession final : public WebSocketSessionBase,
           .device_id = std::nullopt,
           .reason = "",
       };
+    } else if (relay_token_store_ != nullptr) {
+      // Check for a relay token before falling through to normal auth.
+      // Relay tokens are accepted only on this observer socket path — never
+      // on controller sockets. The token must be bound to this session_id.
+      const std::string candidate = ExtractBearerToken(request);
+      if (candidate.starts_with("relay_") &&
+          relay_token_store_->ConsumeIfValid(candidate, session_id_)) {
+        auth_result = vibe::auth::AuthResult{
+            .authenticated = true,
+            .authorized = true,
+            .device_id = std::nullopt,
+            .reason = "",
+        };
+      } else {
+        auth_result = authorizer_.Authorize(
+            vibe::auth::RequestContext{
+                .bearer_token = candidate,
+                .client_address = client_address_,
+                .target = target_,
+                .is_websocket = true,
+                .is_local_request = is_local_request_,
+            },
+            vibe::auth::AuthorizationAction::ObserveSessions);
+      }
     } else {
       auth_result = authorizer_.Authorize(
           vibe::auth::RequestContext{
@@ -892,6 +919,7 @@ class WebSocketSession final : public WebSocketSessionBase,
   bool is_local_request_{false};
   ListenerRole listener_role_{ListenerRole::RemoteClient};
   std::int64_t connected_at_unix_ms_{0};
+  RelayTokenStore* relay_token_store_{nullptr};
 };
 
 template <typename Stream>
@@ -1532,7 +1560,8 @@ class HttpSession : public std::enable_shared_from_this<HttpSession<Stream>> {
               std::shared_ptr<OverviewWebSocketRegistry> overview_websocket_registry,
               const ListenerRole listener_role, const bool remote_tls_enabled,
               std::string remote_listener_host, const std::uint16_t remote_listener_port,
-              std::string remote_tls_certificate_path)
+              std::string remote_tls_certificate_path,
+              RelayTokenStore* relay_token_store = nullptr)
       : stream_(std::forward<Stream>(stream)),
         session_manager_(session_manager),
         authorizer_(authorizer),
@@ -1546,7 +1575,8 @@ class HttpSession : public std::enable_shared_from_this<HttpSession<Stream>> {
         remote_tls_enabled_(remote_tls_enabled),
         remote_listener_host_(std::move(remote_listener_host)),
         remote_listener_port_(remote_listener_port),
-        remote_tls_certificate_path_(std::move(remote_tls_certificate_path)) {}
+        remote_tls_certificate_path_(std::move(remote_tls_certificate_path)),
+        relay_token_store_(relay_token_store) {}
 
   void Start() {
     if constexpr (std::is_same_v<Stream, SslStream>) {
@@ -1591,7 +1621,8 @@ class HttpSession : public std::enable_shared_from_this<HttpSession<Stream>> {
             std::make_shared<WebSocketSession<Stream>>(
                 std::move(self->stream_), self->session_manager_, self->authorizer_,
                 self->websocket_registry_, endpoint.address().to_string(),
-                endpoint.address().is_loopback(), self->listener_role_)
+                endpoint.address().is_loopback(), self->listener_role_,
+                self->relay_token_store_)
                 ->Start(std::move(self->request_));
             return;
           }
@@ -1677,6 +1708,7 @@ class HttpSession : public std::enable_shared_from_this<HttpSession<Stream>> {
   std::string remote_listener_host_;
   std::uint16_t remote_listener_port_{0};
   std::string remote_tls_certificate_path_;
+  RelayTokenStore* relay_token_store_{nullptr};
 };
 
 class HttpListener : public std::enable_shared_from_this<HttpListener> {
@@ -1692,7 +1724,8 @@ class HttpListener : public std::enable_shared_from_this<HttpListener> {
                std::shared_ptr<OverviewWebSocketRegistry> overview_websocket_registry,
                const ListenerRole listener_role, const bool remote_tls_enabled,
                std::string remote_listener_host, const std::uint16_t remote_listener_port,
-               std::string remote_tls_certificate_path)
+               std::string remote_tls_certificate_path,
+               RelayTokenStore* relay_token_store = nullptr)
       : acceptor_(io_context),
         socket_(io_context),
         session_manager_(session_manager),
@@ -1707,7 +1740,8 @@ class HttpListener : public std::enable_shared_from_this<HttpListener> {
         remote_tls_enabled_(remote_tls_enabled),
         remote_listener_host_(std::move(remote_listener_host)),
         remote_listener_port_(remote_listener_port),
-        remote_tls_certificate_path_(std::move(remote_tls_certificate_path)) {
+        remote_tls_certificate_path_(std::move(remote_tls_certificate_path)),
+        relay_token_store_(relay_token_store) {
     boost::system::error_code error_code;
     const tcp::endpoint endpoint(address, port);
 
@@ -1765,7 +1799,8 @@ class HttpListener : public std::enable_shared_from_this<HttpListener> {
                 self->host_admin_, self->websocket_registry_, self->overview_websocket_registry_,
                 self->listener_role_,
                 self->remote_tls_enabled_, self->remote_listener_host_,
-                self->remote_listener_port_, self->remote_tls_certificate_path_)
+                self->remote_listener_port_, self->remote_tls_certificate_path_,
+                self->relay_token_store_)
                 ->Start();
           }
 
@@ -1788,6 +1823,7 @@ class HttpListener : public std::enable_shared_from_this<HttpListener> {
   std::string remote_listener_host_;
   std::uint16_t remote_listener_port_{0};
   std::string remote_tls_certificate_path_;
+  RelayTokenStore* relay_token_store_{nullptr};
   bool stopped_{false};
 };
 
@@ -1803,7 +1839,8 @@ class HttpsListener : public std::enable_shared_from_this<HttpsListener> {
                 std::shared_ptr<WebSocketRegistry> websocket_registry,
                 std::shared_ptr<OverviewWebSocketRegistry> overview_websocket_registry,
                 std::string remote_listener_host, const std::uint16_t remote_listener_port,
-                std::string remote_tls_certificate_path)
+                std::string remote_tls_certificate_path,
+                RelayTokenStore* relay_token_store = nullptr)
       : acceptor_(io_context),
         socket_(io_context),
         ssl_context_(ssl_context),
@@ -1817,7 +1854,8 @@ class HttpsListener : public std::enable_shared_from_this<HttpsListener> {
         overview_websocket_registry_(std::move(overview_websocket_registry)),
         remote_listener_host_(std::move(remote_listener_host)),
         remote_listener_port_(remote_listener_port),
-        remote_tls_certificate_path_(std::move(remote_tls_certificate_path)) {
+        remote_tls_certificate_path_(std::move(remote_tls_certificate_path)),
+        relay_token_store_(relay_token_store) {
     boost::system::error_code error_code;
     const tcp::endpoint endpoint(address, port);
 
@@ -1873,7 +1911,8 @@ class HttpsListener : public std::enable_shared_from_this<HttpsListener> {
                 self->host_config_store_, self->host_admin_, self->websocket_registry_,
                 self->overview_websocket_registry_,
                 ListenerRole::RemoteClient, true, self->remote_listener_host_,
-                self->remote_listener_port_, self->remote_tls_certificate_path_)
+                self->remote_listener_port_, self->remote_tls_certificate_path_,
+                self->relay_token_store_)
                 ->Start();
           }
 
@@ -1895,6 +1934,7 @@ class HttpsListener : public std::enable_shared_from_this<HttpsListener> {
   std::string remote_listener_host_;
   std::uint16_t remote_listener_port_{0};
   std::string remote_tls_certificate_path_;
+  RelayTokenStore* relay_token_store_{nullptr};
   bool stopped_{false};
 };
 
@@ -2558,7 +2598,8 @@ auto HttpServer::Run() -> bool {
                                           *pairing_service_, *pairing_store_, *host_config_store_,
                                           host_admin, websocket_registry, overview_websocket_registry,
                                           remote_bind_address_, remote_port_,
-                                          remote_tls_config.certificate_pem_path);
+                                          remote_tls_config.certificate_pem_path,
+                                          &relay_token_store_);
       remote_https_listener->Start();
     } else {
       remote_http_listener =
@@ -2568,7 +2609,8 @@ auto HttpServer::Run() -> bool {
                                          overview_websocket_registry,
                                          ListenerRole::RemoteClient, false,
                                          remote_bind_address_, remote_port_,
-                                         remote_tls_config.certificate_pem_path);
+                                         remote_tls_config.certificate_pem_path,
+                                         &relay_token_store_);
       remote_http_listener->Start();
     }
 
@@ -2625,7 +2667,13 @@ auto HttpServer::Run() -> bool {
   if (hub_client_) {
     hub_client_->Start(*io_context_);
   }
+  if (hub_control_channel_) {
+    hub_control_channel_->Start();
+  }
   io_context_->run();
+  if (hub_control_channel_) {
+    hub_control_channel_->Stop();
+  }
   if (hub_client_) {
     hub_client_->Stop();
   }
@@ -2653,9 +2701,11 @@ void HttpServer::Stop() {
     io_context = io_context_.get();
   }
 
-  // Stop the Hub heartbeat thread before triggering session shutdown so that
-  // ListSessions() cannot race with session_manager_.Shutdown() in the
-  // stop_callback below.
+  // Stop Hub components before triggering session shutdown so that
+  // background threads cannot race with session_manager_.Shutdown().
+  if (hub_control_channel_) {
+    hub_control_channel_->Stop();
+  }
   if (hub_client_) {
     hub_client_->Stop();
   }
@@ -2676,6 +2726,20 @@ void HttpServer::EnableHubIntegration(std::string hub_url, std::string hub_token
   }
   hub_client_ = std::make_unique<HubClient>(
       std::move(hub_url), std::move(hub_token), session_manager_);
+}
+
+void HttpServer::EnableHubControlChannel(std::string hub_url, std::string hub_token) {
+  if (hub_url.empty() || hub_token.empty()) {
+    return;
+  }
+  const bool local_tls = remote_tls_override_.has_value();
+  hub_control_channel_ = std::make_unique<HubControlChannel>(
+      hub_url, std::move(hub_token), remote_port_, local_tls,
+      [this](const std::string& session_id) { return IssueRelayToken(session_id); });
+}
+
+auto HttpServer::IssueRelayToken(const std::string& session_id) -> std::string {
+  return relay_token_store_.Issue(session_id);
 }
 
 }  // namespace vibe::net

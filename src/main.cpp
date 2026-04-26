@@ -1201,6 +1201,7 @@ auto main(const int argc, char** argv) -> int {
     vibe::net::HttpServer server(admin_host, admin_port, remote_host, remote_port,
                                  remote_tls_override, enable_discovery);
     server.EnableHubIntegration(hub_url, hub_token);
+    server.EnableHubControlChannel(hub_url, hub_token);
     sigset_t signal_set;
     sigemptyset(&signal_set);
     sigaddset(&signal_set, SIGHUP);
