@@ -1026,6 +1026,15 @@ auto ParseProviderOption(const std::string& value) -> std::optional<vibe::sessio
   return std::nullopt;
 }
 
+template <typename T>
+auto ParseUnsignedOptionValue(const std::string& value) -> std::optional<T> {
+  try {
+    return static_cast<T>(std::stoull(value));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 void ConsumeImplicitProviderPositional(ParsedCommandOptions& options) {
   if (options.provider.has_value() || options.positionals.empty()) {
     return;
@@ -1139,37 +1148,65 @@ auto ParseCommandOptions(const int argc, char** argv, int start_index,
       continue;
     }
     if (argument == "--lines" && index + 1 < argc) {
-      options.lines = static_cast<std::size_t>(std::stoull(argv[index + 1]));
+      const auto parsed = ParseUnsignedOptionValue<std::size_t>(argv[index + 1]);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      options.lines = *parsed;
       index += 2;
       continue;
     }
     if (argument == "--limit" && index + 1 < argc) {
-      options.limit = static_cast<std::size_t>(std::stoull(argv[index + 1]));
+      const auto parsed = ParseUnsignedOptionValue<std::size_t>(argv[index + 1]);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      options.limit = *parsed;
       index += 2;
       continue;
     }
     if (argument == "--start" && index + 1 < argc) {
-      options.start_revision = static_cast<std::uint64_t>(std::stoull(argv[index + 1]));
+      const auto parsed = ParseUnsignedOptionValue<std::uint64_t>(argv[index + 1]);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      options.start_revision = *parsed;
       index += 2;
       continue;
     }
     if (argument == "--end" && index + 1 < argc) {
-      options.end_revision = static_cast<std::uint64_t>(std::stoull(argv[index + 1]));
+      const auto parsed = ParseUnsignedOptionValue<std::uint64_t>(argv[index + 1]);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      options.end_revision = *parsed;
       index += 2;
       continue;
     }
     if (argument == "--revision" && index + 1 < argc) {
-      options.revision = static_cast<std::uint64_t>(std::stoull(argv[index + 1]));
+      const auto parsed = ParseUnsignedOptionValue<std::uint64_t>(argv[index + 1]);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      options.revision = *parsed;
       index += 2;
       continue;
     }
     if (argument == "--before" && index + 1 < argc) {
-      options.before = static_cast<std::size_t>(std::stoull(argv[index + 1]));
+      const auto parsed = ParseUnsignedOptionValue<std::size_t>(argv[index + 1]);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      options.before = *parsed;
       index += 2;
       continue;
     }
     if (argument == "--after" && index + 1 < argc) {
-      options.after = static_cast<std::size_t>(std::stoull(argv[index + 1]));
+      const auto parsed = ParseUnsignedOptionValue<std::size_t>(argv[index + 1]);
+      if (!parsed.has_value()) {
+        return std::nullopt;
+      }
+      options.after = *parsed;
       index += 2;
       continue;
     }

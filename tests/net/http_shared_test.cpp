@@ -890,6 +890,103 @@ TEST(HttpSharedTest, EvidenceSearchEmitsObservationWithActorHeader) {
   EXPECT_FALSE(observations[0].replay_token.empty());
 }
 
+TEST(HttpSharedTest, EvidenceRangeAndContextRoutesReturnEntries) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  vibe::service::ObservationStore observation_store;
+  auto context = MakeAuthContext(authorizer, pairing_service, host_config_store);
+  context.observation_store = &observation_store;
+
+  const auto summary = session_manager.CreateLogSession(vibe::service::LogSessionCreateRequest{
+      .workspace_root = ".",
+      .title = "app.log",
+  });
+  ASSERT_TRUE(summary.has_value());
+  ASSERT_TRUE(session_manager.AppendLogStdout(summary->id.value(), "one\ntwo\nthree\n", 1000));
+
+  HttpRequest range_request;
+  range_request.method(http::verb::get);
+  const std::string range_target =
+      "/sessions/" + summary->id.value() + "/evidence/range?start=1&end=2&limit=10";
+  range_request.target(range_target);
+  range_request.version(11);
+  range_request.set(http::field::authorization, "Bearer good-token");
+
+  const HttpResponse range_response = HandleRequest(range_request, session_manager, context);
+  EXPECT_EQ(range_response.result(), http::status::ok);
+  EXPECT_NE(range_response.body().find("\"operation\":\"range\""), std::string::npos);
+  EXPECT_NE(range_response.body().find("\"text\":\"one\""), std::string::npos);
+  EXPECT_NE(range_response.body().find("\"text\":\"two\""), std::string::npos);
+
+  HttpRequest context_request;
+  context_request.method(http::verb::get);
+  const std::string context_target =
+      "/sessions/" + summary->id.value() + "/evidence/context?revision=2&before=1&after=1";
+  context_request.target(context_target);
+  context_request.version(11);
+  context_request.set(http::field::authorization, "Bearer good-token");
+
+  const HttpResponse context_response = HandleRequest(context_request, session_manager, context);
+  EXPECT_EQ(context_response.result(), http::status::ok);
+  EXPECT_NE(context_response.body().find("\"operation\":\"context\""), std::string::npos);
+  EXPECT_NE(context_response.body().find("\"text\":\"one\""), std::string::npos);
+  EXPECT_NE(context_response.body().find("\"text\":\"three\""), std::string::npos);
+}
+
+TEST(HttpSharedTest, RejectsInvalidEvidenceOperation) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  vibe::service::ObservationStore observation_store;
+  auto context = MakeAuthContext(authorizer, pairing_service, host_config_store);
+  context.observation_store = &observation_store;
+
+  const auto summary = session_manager.CreateLogSession(vibe::service::LogSessionCreateRequest{
+      .workspace_root = ".",
+      .title = "app.log",
+  });
+  ASSERT_TRUE(summary.has_value());
+
+  HttpRequest request;
+  request.method(http::verb::get);
+  const std::string target = "/sessions/" + summary->id.value() + "/evidence/bogus";
+  request.target(target);
+  request.version(11);
+  request.set(http::field::authorization, "Bearer good-token");
+
+  const HttpResponse response = HandleRequest(request, session_manager, context);
+  EXPECT_EQ(response.result(), http::status::not_found);
+}
+
+TEST(HttpSharedTest, RejectsEvidenceRouteWrongMethod) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  vibe::service::ObservationStore observation_store;
+  auto context = MakeAuthContext(authorizer, pairing_service, host_config_store);
+  context.observation_store = &observation_store;
+
+  const auto summary = session_manager.CreateLogSession(vibe::service::LogSessionCreateRequest{
+      .workspace_root = ".",
+      .title = "app.log",
+  });
+  ASSERT_TRUE(summary.has_value());
+
+  HttpRequest request;
+  request.method(http::verb::post);
+  const std::string target = "/sessions/" + summary->id.value() + "/evidence/tail";
+  request.target(target);
+  request.version(11);
+  request.set(http::field::authorization, "Bearer good-token");
+
+  const HttpResponse response = HandleRequest(request, session_manager, context);
+  EXPECT_EQ(response.result(), http::status::method_not_allowed);
+}
+
 TEST(HttpSharedTest, ListsObservationEvents) {
   auto session_manager = MakeManager();
   FakeAuthorizer authorizer;
@@ -923,6 +1020,25 @@ TEST(HttpSharedTest, ListsObservationEvents) {
   EXPECT_EQ(response.result(), http::status::ok);
   EXPECT_NE(response.body().find("\"actorSessionId\":\"agent_1\""), std::string::npos);
   EXPECT_NE(response.body().find("\"operation\":\"tail\""), std::string::npos);
+}
+
+TEST(HttpSharedTest, ObservationsRouteReportsUnavailableWithoutStore) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+
+  HttpRequest request;
+  request.method(http::verb::get);
+  request.target("/observations");
+  request.version(11);
+  request.set(http::field::authorization, "Bearer good-token");
+
+  const HttpResponse response =
+      HandleRequest(request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store));
+  EXPECT_EQ(response.result(), http::status::service_unavailable);
+  EXPECT_NE(response.body().find("observation store unavailable"), std::string::npos);
 }
 
 TEST(HttpSharedTest, RejectsInvalidInputRequest) {

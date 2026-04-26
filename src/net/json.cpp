@@ -153,7 +153,9 @@ auto MakeEvidenceResultJson(const vibe::service::EvidenceResult& result) -> json
   object["bufferExhausted"] = result.buffer_exhausted;
   object["droppedEntries"] = result.dropped_entries;
   object["droppedBytes"] = result.dropped_bytes;
-  object["errorCode"] = result.error_code;
+  if (!result.error_code.empty()) {
+    object["errorCode"] = result.error_code;
+  }
   object["replayToken"] = result.replay_token;
   return object;
 }
@@ -165,9 +167,15 @@ auto MakeObservationEventJson(const vibe::service::ObservationEvent& event) -> j
   object["actorSessionId"] = event.actor_session_id;
   object["actorTitle"] = event.actor_title;
   object["actorId"] = event.actor_id;
-  object["pid"] = event.pid;
-  object["uid"] = event.uid;
-  object["gid"] = event.gid;
+  if (event.pid != 0) {
+    object["pid"] = event.pid;
+  }
+  if (event.uid != 0) {
+    object["uid"] = event.uid;
+  }
+  if (event.gid != 0) {
+    object["gid"] = event.gid;
+  }
   object["operation"] = std::string(vibe::service::ToString(event.operation));
   object["source"] = MakeEvidenceSourceRefJson(event.source);
   object["sourceTitle"] = event.source_title;

@@ -1236,7 +1236,8 @@ auto HandleEvidenceRequest(const HttpRequest& request,
                            const std::string& operation,
                            const std::string& target) -> HttpResponse {
   if (request.method() != http::verb::get) {
-    return MakeJsonResponse(request, http::status::not_found, "{\"error\":\"not found\"}");
+    return MakeJsonResponse(request, http::status::method_not_allowed,
+                            "{\"error\":\"method not allowed\"}");
   }
 
   if (const auto auth_response =

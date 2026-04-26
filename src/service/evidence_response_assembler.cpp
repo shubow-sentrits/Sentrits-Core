@@ -74,8 +74,8 @@ auto MakeReplayToken(const EvidenceResult& result) -> std::string {
   std::ostringstream json;
   json << "{\"source_session_id\":\"" << JsonEscape(result.source.session_id.value()) << "\","
        << "\"operation\":\"" << ToString(result.operation) << "\","
-       << "\"seq_start\":" << result.revision_start << ','
-       << "\"seq_end\":" << result.revision_end << ','
+       << "\"revision_start\":" << result.revision_start << ','
+       << "\"revision_end\":" << result.revision_end << ','
        << "\"limit\":" << result.entries.size() << ','
        << "\"query\":\"" << JsonEscape(result.query) << "\"}";
   return Base64UrlEncode(json.str());
