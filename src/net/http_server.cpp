@@ -293,6 +293,7 @@ class WebSocketSessionBase {
 
   virtual void Start(HttpRequest request) = 0;
   virtual void SendPendingOutput() = 0;
+  virtual void SendExternalEvent(std::string payload) = 0;
   virtual void ForceClose() = 0;
 
   [[nodiscard]] virtual auto session_id() const -> const std::string& = 0;
@@ -302,6 +303,22 @@ class WebSocketSessionBase {
   [[nodiscard]] virtual auto claimed_kind() const -> vibe::session::ControllerKind = 0;
   [[nodiscard]] virtual auto connected_at_unix_ms() const -> std::int64_t = 0;
 };
+
+void BroadcastObservationCreated(OverviewWebSocketRegistry& websocket_registry,
+                                 const vibe::service::ObservationEvent& event) {
+  PruneOverviewRegistry(websocket_registry);
+  const std::string payload = ToJson(ObservationCreatedEvent{.event = event});
+  for (auto it = websocket_registry.begin(); it != websocket_registry.end();) {
+    if (const auto session = it->lock()) {
+      if (!session->is_local_request()) {
+        session->SendExternalEvent(payload);
+      }
+      ++it;
+    } else {
+      it = websocket_registry.erase(it);
+    }
+  }
+}
 
 template <typename Stream>
 class OverviewWebSocketSession final : public WebSocketSessionBase,
@@ -371,6 +388,15 @@ class OverviewWebSocketSession final : public WebSocketSessionBase,
   }
 
   void SendPendingOutput() override { QueueInventorySnapshot(); }
+  void SendExternalEvent(std::string payload) override {
+    if (payload.empty()) {
+      return;
+    }
+    pending_frames_.push_back(PendingFrame{.payload = std::move(payload)});
+    if (!write_in_progress_) {
+      DoWrite();
+    }
+  }
   [[nodiscard]] auto session_id() const -> const std::string& override { return empty_; }
   [[nodiscard]] auto client_id() const -> const std::string& override { return client_id_; }
   [[nodiscard]] auto client_address() const -> const std::string& override { return client_address_; }
@@ -586,6 +612,7 @@ class WebSocketSession final : public WebSocketSessionBase,
 
     QueueOutputFrame(*output, output->seq_end + 1);
   }
+  void SendExternalEvent(std::string /*payload*/) override {}
 
   [[nodiscard]] auto session_id() const -> const std::string& override { return session_id_; }
   [[nodiscard]] auto client_id() const -> const std::string& override { return client_id_; }
@@ -1040,6 +1067,7 @@ class RemoteControllerWebSocketSession final
       close_after_writes_ = true;
     }
   }
+  void SendExternalEvent(std::string /*payload*/) override {}
 
   [[nodiscard]] auto session_id() const -> const std::string& override { return session_id_; }
   [[nodiscard]] auto client_id() const -> const std::string& override { return client_id_; }
@@ -1651,6 +1679,11 @@ class HttpSession : public std::enable_shared_from_this<HttpSession<Stream>> {
                   .host_config_store = &self->host_config_store_,
                   .host_admin = self->host_admin_.get(),
                   .observation_store = &self->observation_store_,
+                  .observation_event_sink =
+                      [overview_registry = self->overview_websocket_registry_](
+                          const vibe::service::ObservationEvent& event) {
+                        BroadcastObservationCreated(*overview_registry, event);
+                      },
                   .storage_root = self->host_config_store_.storage_root(),
                   .client_address = endpoint.address().to_string(),
                   .is_local_request = endpoint.address().is_loopback(),

@@ -650,6 +650,13 @@ auto ToJson(const SessionInventoryEvent& event) -> std::string {
   return json::serialize(object);
 }
 
+auto ToJson(const ObservationCreatedEvent& event) -> std::string {
+  json::object object;
+  object["type"] = "observation.created";
+  object["event"] = MakeObservationEventJson(event.event);
+  return json::serialize(object);
+}
+
 auto ToJson(const ErrorEvent& event) -> std::string {
   json::object object;
   object["type"] = "error";

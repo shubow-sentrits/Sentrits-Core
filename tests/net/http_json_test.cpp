@@ -354,6 +354,37 @@ TEST(HttpJsonTest, OmitsUnknownObservationProcessIdentity) {
   EXPECT_FALSE(parsed.contains("gid"));
 }
 
+TEST(HttpJsonTest, SerializesObservationCreatedEvent) {
+  const auto session_id = vibe::session::SessionId::TryCreate("log_004");
+  ASSERT_TRUE(session_id.has_value());
+
+  const std::string payload = ToJson(ObservationCreatedEvent{
+      .event =
+          vibe::service::ObservationEvent{
+              .id = "obs_2",
+              .actor_session_id = "agent_2",
+              .actor_id = "agent_2",
+              .operation = vibe::service::EvidenceOperation::Search,
+              .source =
+                  vibe::service::EvidenceSourceRef{
+                      .kind = vibe::service::EvidenceSourceKind::ManagedLogSession,
+                      .session_id = *session_id,
+                  },
+              .source_title = "Runtime Log",
+              .query = "error",
+              .result_count = 3,
+              .replay_token = "token_4",
+          },
+  });
+
+  const auto parsed = json::parse(payload).as_object();
+  EXPECT_EQ(json::value_to<std::string>(parsed.at("type")), "observation.created");
+  const auto& event = parsed.at("event").as_object();
+  EXPECT_EQ(json::value_to<std::string>(event.at("id")), "obs_2");
+  EXPECT_EQ(json::value_to<std::string>(event.at("operation")), "search");
+  EXPECT_EQ(json::value_to<std::string>(event.at("replayToken")), "token_4");
+}
+
 TEST(HttpJsonTest, SerializesObservationEventList) {
   const auto session_id = vibe::session::SessionId::TryCreate("log_004");
   ASSERT_TRUE(session_id.has_value());

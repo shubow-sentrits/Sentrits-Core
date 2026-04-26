@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "vibe/auth/authorizer.h"
@@ -34,6 +35,7 @@ struct HttpRouteContext {
   vibe::store::HostConfigStore* host_config_store{nullptr};
   vibe::net::HostAdmin* host_admin{nullptr};
   vibe::service::ObservationStore* observation_store{nullptr};
+  std::function<void(const vibe::service::ObservationEvent&)> observation_event_sink;
   std::filesystem::path storage_root;
   std::string client_address;
   bool is_local_request{false};

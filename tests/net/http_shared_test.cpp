@@ -903,6 +903,11 @@ TEST(HttpSharedTest, EvidenceSearchEmitsObservationWithActorHeader) {
   vibe::service::ObservationStore observation_store;
   auto context = MakeAuthContext(authorizer, pairing_service, host_config_store);
   context.observation_store = &observation_store;
+  std::vector<vibe::service::ObservationEvent> pushed_observations;
+  context.observation_event_sink =
+      [&pushed_observations](const vibe::service::ObservationEvent& event) {
+        pushed_observations.push_back(event);
+      };
 
   const auto summary = session_manager.CreateLogSession(vibe::service::LogSessionCreateRequest{
       .workspace_root = ".",
@@ -933,6 +938,9 @@ TEST(HttpSharedTest, EvidenceSearchEmitsObservationWithActorHeader) {
   EXPECT_EQ(observations[0].operation, vibe::service::EvidenceOperation::Search);
   EXPECT_EQ(observations[0].source_title, "app.log");
   EXPECT_FALSE(observations[0].replay_token.empty());
+  ASSERT_EQ(pushed_observations.size(), 1U);
+  EXPECT_EQ(pushed_observations[0].id, observations[0].id);
+  EXPECT_EQ(pushed_observations[0].actor_session_id, "agent_1");
 }
 
 TEST(HttpSharedTest, EvidenceRangeAndContextRoutesReturnEntries) {

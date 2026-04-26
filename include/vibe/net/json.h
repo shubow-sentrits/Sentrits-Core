@@ -40,6 +40,10 @@ struct SessionInventoryEvent {
   std::vector<vibe::service::SessionSummary> sessions;
 };
 
+struct ObservationCreatedEvent {
+  vibe::service::ObservationEvent event;
+};
+
 struct ErrorEvent {
   std::string session_id;
   std::string code;
@@ -64,6 +68,7 @@ struct ErrorEvent {
 [[nodiscard]] auto ToJson(const SessionExitedEvent& event) -> std::string;
 [[nodiscard]] auto ToJson(const SessionActivityEvent& event) -> std::string;
 [[nodiscard]] auto ToJson(const SessionInventoryEvent& event) -> std::string;
+[[nodiscard]] auto ToJson(const ObservationCreatedEvent& event) -> std::string;
 [[nodiscard]] auto ToJson(const ErrorEvent& event) -> std::string;
 [[nodiscard]] auto ToJson(const DiscoveryInfo& info) -> std::string;
 [[nodiscard]] auto ToJson(const vibe::session::EffectiveEnvironment& env, bool redact) -> std::string;

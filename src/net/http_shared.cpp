@@ -1258,7 +1258,11 @@ auto FinalizeEvidenceResponse(const HttpRequest& request,
       .timestamp_unix_ms = CurrentUnixTimeMs(),
   });
   if (context.observation_store != nullptr && assembly.observation.has_value()) {
-    static_cast<void>(context.observation_store->Add(*assembly.observation));
+    const vibe::service::ObservationEvent& stored_observation =
+        context.observation_store->Add(*assembly.observation);
+    if (context.observation_event_sink) {
+      context.observation_event_sink(stored_observation);
+    }
   }
   return MakeJsonResponse(request, http::status::ok, ToJson(assembly.result));
 }
