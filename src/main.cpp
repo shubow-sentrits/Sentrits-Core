@@ -754,6 +754,11 @@ void PrintUsage() {
             << "  sentrits relay observe --hub-url URL --token TOKEN --host-id HOST_ID --session-id SESSION_ID\n"
             << "  sentrits session stop [--host HOST] [--port PORT] [--json] <session-id>\n"
             << "  sentrits session clear [--host HOST] [--port PORT] [--json]\n"
+            << "  sentrits evidence tail [--host HOST] [--port PORT] [--lines N] <session-id>\n"
+            << "  sentrits evidence search [--host HOST] [--port PORT] [--limit N] <session-id> <query>\n"
+            << "  sentrits evidence range [--host HOST] [--port PORT] --start N --end N [--limit N] <session-id>\n"
+            << "  sentrits evidence context [--host HOST] [--port PORT] --revision N [--before N] [--after N] <session-id>\n"
+            << "  sentrits observations list [--host HOST] [--port PORT] [--limit N]\n"
             << "  sentrits host status [--host HOST] [--port PORT] [--json]\n"
             << "  sentrits host set-name [--host HOST] [--port PORT] <display-name>\n"
             << "  sentrits host set-hub <hub-url> <hub-token>\n"
@@ -905,6 +910,27 @@ void PrintRecordHuman(const vibe::cli::ListedRecord& record) {
   }
 }
 
+auto PrintEvidenceHuman(const std::string& body) -> bool {
+  boost::system::error_code error_code;
+  const json::value parsed = json::parse(body, error_code);
+  if (error_code || !parsed.is_object()) {
+    return false;
+  }
+  const auto& object = parsed.as_object();
+  const auto* entries = object.if_contains("entries");
+  if (entries == nullptr || !entries->is_array()) {
+    return false;
+  }
+  for (const auto& entry_value : entries->as_array()) {
+    if (!entry_value.is_object()) {
+      continue;
+    }
+    const auto& entry = entry_value.as_object();
+    std::cout << JsonString(entry, "text") << '\n';
+  }
+  return true;
+}
+
 auto PrintSessionSnapshotHuman(const std::string& body) -> bool {
   boost::system::error_code error_code;
   const json::value parsed = json::parse(body, error_code);
@@ -976,6 +1002,13 @@ struct ParsedCommandOptions {
   std::optional<std::string> record_id;
   std::optional<std::string> shell_command;
   std::optional<vibe::session::ProviderType> provider;
+  std::optional<std::size_t> lines;
+  std::optional<std::size_t> limit;
+  std::optional<std::uint64_t> start_revision;
+  std::optional<std::uint64_t> end_revision;
+  std::optional<std::uint64_t> revision;
+  std::optional<std::size_t> before;
+  std::optional<std::size_t> after;
   std::vector<std::string> positionals;
   // Environment model options.
   std::optional<vibe::session::EnvMode> env_mode;
@@ -1102,6 +1135,41 @@ auto ParseCommandOptions(const int argc, char** argv, int start_index,
         return std::nullopt;
       }
       options.provider = *provider;
+      index += 2;
+      continue;
+    }
+    if (argument == "--lines" && index + 1 < argc) {
+      options.lines = static_cast<std::size_t>(std::stoull(argv[index + 1]));
+      index += 2;
+      continue;
+    }
+    if (argument == "--limit" && index + 1 < argc) {
+      options.limit = static_cast<std::size_t>(std::stoull(argv[index + 1]));
+      index += 2;
+      continue;
+    }
+    if (argument == "--start" && index + 1 < argc) {
+      options.start_revision = static_cast<std::uint64_t>(std::stoull(argv[index + 1]));
+      index += 2;
+      continue;
+    }
+    if (argument == "--end" && index + 1 < argc) {
+      options.end_revision = static_cast<std::uint64_t>(std::stoull(argv[index + 1]));
+      index += 2;
+      continue;
+    }
+    if (argument == "--revision" && index + 1 < argc) {
+      options.revision = static_cast<std::uint64_t>(std::stoull(argv[index + 1]));
+      index += 2;
+      continue;
+    }
+    if (argument == "--before" && index + 1 < argc) {
+      options.before = static_cast<std::size_t>(std::stoull(argv[index + 1]));
+      index += 2;
+      continue;
+    }
+    if (argument == "--after" && index + 1 < argc) {
+      options.after = static_cast<std::size_t>(std::stoull(argv[index + 1]));
       index += 2;
       continue;
     }
@@ -1322,6 +1390,71 @@ auto main(const int argc, char** argv) -> int {
     }
     PrintUsage();
     return 1;
+  }
+
+  if (command == "evidence" && argc >= 3) {
+    const std::string subcommand = argv[2];
+    const auto options = ParseCommandOptions(argc, argv, 3, LoadConfiguredAdminEndpoint());
+    if (!options.has_value() || options->positionals.empty()) {
+      PrintUsage();
+      return 1;
+    }
+
+    vibe::cli::EvidenceCliRequest evidence_request{
+        .session_id = options->positionals.front(),
+        .operation = subcommand,
+        .lines = options->lines,
+        .limit = options->limit,
+    };
+    if (subcommand == "search") {
+      if (options->positionals.size() < 2U) {
+        PrintUsage();
+        return 1;
+      }
+      evidence_request.query = options->positionals[1];
+    } else if (subcommand == "range") {
+      evidence_request.revision_start = options->start_revision;
+      evidence_request.revision_end = options->end_revision;
+    } else if (subcommand == "context") {
+      evidence_request.revision = options->revision;
+      evidence_request.before = options->before;
+      evidence_request.after = options->after;
+    } else if (subcommand != "tail") {
+      PrintUsage();
+      return 1;
+    }
+
+    const auto result = vibe::cli::GetEvidence(options->endpoint, evidence_request);
+    if (!result.has_value()) {
+      std::cerr << "failed to read evidence via daemon at " << options->endpoint.host << ":"
+                << options->endpoint.port << '\n';
+      return 1;
+    }
+    if (options->json_output || !PrintEvidenceHuman(*result)) {
+      std::cout << PrettyPrintJson(*result) << '\n';
+    }
+    return 0;
+  }
+
+  if (command == "observations" && argc >= 3) {
+    const std::string subcommand = argv[2];
+    if (subcommand != "list") {
+      PrintUsage();
+      return 1;
+    }
+    const auto options = ParseCommandOptions(argc, argv, 3, LoadConfiguredAdminEndpoint());
+    if (!options.has_value()) {
+      PrintUsage();
+      return 1;
+    }
+    const auto result = vibe::cli::ListObservations(options->endpoint, options->limit.value_or(200));
+    if (!result.has_value()) {
+      std::cerr << "failed to list observations via daemon at " << options->endpoint.host << ":"
+                << options->endpoint.port << '\n';
+      return 1;
+    }
+    std::cout << PrettyPrintJson(*result) << '\n';
+    return 0;
   }
 
   if (command == "session-start") {
