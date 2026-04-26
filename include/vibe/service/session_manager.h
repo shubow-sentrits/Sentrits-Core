@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "vibe/service/git_inspector.h"
+#include "vibe/service/evidence.h"
+#include "vibe/service/log_buffer.h"
 #include "vibe/service/workspace_file_watcher.h"
 #include "vibe/session/bootstrapped_env_cache.h"
 #include "vibe/session/env_config.h"
@@ -37,6 +39,13 @@ struct CreateSessionRequest {
   std::optional<vibe::session::EnvMode> env_mode{std::nullopt};
   std::unordered_map<std::string, std::string> environment_overrides{};
   std::optional<std::string> env_file_path{std::nullopt};
+};
+
+struct LogSessionCreateRequest {
+  std::string workspace_root;
+  std::string title;
+  std::vector<std::string> group_tags;
+  LogBufferLimits limits{};
 };
 
 enum class SessionGroupTagsUpdateMode {
@@ -109,6 +118,27 @@ struct SessionFileReadResult {
   bool truncated{false};
 };
 
+struct EvidenceTailOptions {
+  std::size_t lines{200};
+};
+
+struct EvidenceRangeOptions {
+  std::uint64_t revision_start{0};
+  std::uint64_t revision_end{0};
+  std::size_t limit{200};
+};
+
+struct EvidenceSearchOptions {
+  std::string query;
+  std::size_t limit{200};
+};
+
+struct EvidenceContextOptions {
+  std::uint64_t revision{0};
+  std::size_t before{80};
+  std::size_t after{120};
+};
+
 class SessionManager {
  public:
   using PtyProcessFactory = std::function<std::unique_ptr<vibe::session::IPtyProcess>()>;
@@ -122,6 +152,12 @@ class SessionManager {
 
   [[nodiscard]] auto CreateSession(const CreateSessionRequest& request)
       -> std::optional<SessionSummary>;
+  [[nodiscard]] auto CreateLogSession(const LogSessionCreateRequest& request)
+      -> std::optional<SessionSummary>;
+  [[nodiscard]] auto AppendLogStdout(const std::string& session_id, std::string data,
+                                     std::int64_t timestamp_unix_ms) -> bool;
+  [[nodiscard]] auto AppendLogStderr(const std::string& session_id, std::string data,
+                                     std::int64_t timestamp_unix_ms) -> bool;
   [[nodiscard]] auto last_create_error_message() const -> const std::string&;
   [[nodiscard]] auto last_create_error_session_id() const -> const std::optional<std::string>&;
   [[nodiscard]] auto LoadPersistedSessions() -> std::size_t;
@@ -136,6 +172,18 @@ class SessionManager {
   [[nodiscard]] auto GetReadableFd(const std::string& session_id) const -> std::optional<int>;
   [[nodiscard]] auto ReadFile(const std::string& session_id, const std::string& workspace_path,
                               std::size_t max_bytes) const -> SessionFileReadResult;
+  [[nodiscard]] auto TailEvidence(const std::string& session_id,
+                                  const EvidenceTailOptions& options) const
+      -> std::optional<EvidenceResult>;
+  [[nodiscard]] auto RangeEvidence(const std::string& session_id,
+                                   const EvidenceRangeOptions& options) const
+      -> std::optional<EvidenceResult>;
+  [[nodiscard]] auto SearchEvidence(const std::string& session_id,
+                                    const EvidenceSearchOptions& options) const
+      -> std::optional<EvidenceResult>;
+  [[nodiscard]] auto ContextEvidence(const std::string& session_id,
+                                     const EvidenceContextOptions& options) const
+      -> std::optional<EvidenceResult>;
   [[nodiscard]] auto GetSessionEnv(const std::string& session_id) const
       -> std::optional<vibe::session::EffectiveEnvironment>;
   [[nodiscard]] auto SendInput(const std::string& session_id, const std::string& input) -> bool;
@@ -167,6 +215,7 @@ class SessionManager {
     vibe::session::SessionId id;
     std::unique_ptr<vibe::session::IPtyProcess> process;
     std::unique_ptr<vibe::session::SessionRuntime> runtime;
+    std::unique_ptr<LogBuffer> log_buffer;
     std::unique_ptr<vibe::service::GitInspector> git_inspector;
     std::unique_ptr<vibe::service::WorkspaceFileWatcher> file_watcher;
     std::optional<vibe::session::SessionSnapshot> recovered_snapshot;

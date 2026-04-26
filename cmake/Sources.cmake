@@ -17,6 +17,7 @@ set(VIBE_CORE_SOURCES
   src/store/host_config_store.cpp
   src/service/git_inspector.cpp
   src/service/log_buffer.cpp
+  src/service/observation_store.cpp
   src/service/session_manager.cpp
   src/service/workspace_file_watcher.cpp
   src/session/env_config.cpp
@@ -53,6 +54,7 @@ set(SENTRITS_TEST_SOURCES
   tests/store/file_stores_test.cpp
   tests/service/git_inspector_test.cpp
   tests/service/log_buffer_test.cpp
+  tests/service/observation_store_test.cpp
   tests/service/session_manager_test.cpp
   tests/service/workspace_file_watcher_test.cpp
   tests/session/env_resolver_test.cpp

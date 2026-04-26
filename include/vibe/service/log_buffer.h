@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "vibe/service/evidence.h"
@@ -26,6 +27,12 @@ struct LogBufferStats {
   std::uint64_t dropped_bytes = 0;
 };
 
+struct LogBufferSearchResult {
+  std::vector<EvidenceEntry> entries;
+  std::vector<EvidenceHighlight> highlights;
+  bool truncated = false;
+};
+
 class LogBuffer {
  public:
   LogBuffer(EvidenceSourceRef source, LogBufferLimits limits);
@@ -35,6 +42,11 @@ class LogBuffer {
 
   [[nodiscard]] auto Tail(std::size_t limit, bool include_partial = true) const
       -> std::vector<EvidenceEntry>;
+  [[nodiscard]] auto Range(std::uint64_t revision_start,
+                           std::uint64_t revision_end,
+                           std::size_t limit) const -> std::vector<EvidenceEntry>;
+  [[nodiscard]] auto Search(std::string_view query, std::size_t limit) const
+      -> LogBufferSearchResult;
   [[nodiscard]] auto Context(std::uint64_t revision, std::size_t before, std::size_t after) const
       -> std::vector<EvidenceEntry>;
   [[nodiscard]] auto ContainsRevision(std::uint64_t revision) const -> bool;

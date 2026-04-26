@@ -188,6 +188,48 @@ auto BuildShellModeCommand(const vibe::session::EffectiveEnvironment& effective_
   return script.str();
 }
 
+auto MakeEvidenceResultFromEntries(const EvidenceSourceRef& source,
+                                   const EvidenceOperation operation,
+                                   std::string query,
+                                   std::vector<EvidenceEntry> entries,
+                                   const LogBufferStats& stats) -> EvidenceResult {
+  const std::uint64_t revision_start = entries.empty() ? 0U : entries.front().revision;
+  const std::uint64_t revision_end = entries.empty() ? 0U : entries.back().revision;
+  return EvidenceResult{
+      .source = source,
+      .operation = operation,
+      .query = std::move(query),
+      .revision_start = revision_start,
+      .revision_end = revision_end,
+      .oldest_revision = stats.oldest_revision,
+      .latest_revision = stats.latest_revision,
+      .entries = std::move(entries),
+      .highlights = {},
+      .truncated = false,
+      .buffer_exhausted = false,
+      .dropped_entries = stats.dropped_entries,
+      .dropped_bytes = stats.dropped_bytes,
+      .error_code = "",
+      .replay_token = "",
+  };
+}
+
+auto MakeBufferExhaustedEvidenceResult(const EvidenceSourceRef& source,
+                                       const EvidenceOperation operation,
+                                       const LogBufferStats& stats) -> EvidenceResult {
+  return EvidenceResult{
+      .source = source,
+      .operation = operation,
+      .oldest_revision = stats.oldest_revision,
+      .latest_revision = stats.latest_revision,
+      .truncated = true,
+      .buffer_exhausted = true,
+      .dropped_entries = stats.dropped_entries,
+      .dropped_bytes = stats.dropped_bytes,
+      .error_code = "buffer_exhausted",
+  };
+}
+
 auto SummarizeEscapedInput(const std::string_view data) -> std::optional<std::string> {
   if (data.empty() || data.find('\x1b') == std::string_view::npos) {
     return std::nullopt;
@@ -1055,6 +1097,99 @@ auto SessionManager::last_create_error_session_id() const -> const std::optional
   return last_create_error_session_id_;
 }
 
+auto SessionManager::CreateLogSession(const LogSessionCreateRequest& request)
+    -> std::optional<SessionSummary> {
+  last_create_error_message_.clear();
+  last_create_error_session_id_.reset();
+  const auto session_id = MakeSessionId();
+  if (!session_id.has_value()) {
+    last_create_error_message_ = "failed to allocate session id";
+    return std::nullopt;
+  }
+
+  const auto now_unix_ms = CurrentUnixTimeMs();
+  vibe::session::SessionMetadata metadata{
+      .id = *session_id,
+      .provider = vibe::session::ProviderType::Codex,  // placeholder: log sessions need their own ProviderType
+      .workspace_root = request.workspace_root,
+      .title = request.title,
+      .status = vibe::session::SessionStatus::Running,
+      .conversation_id = std::nullopt,
+      .group_tags = vibe::session::NormalizeGroupTags(request.group_tags),
+  };
+  vibe::session::SessionSnapshot snapshot{
+      .metadata = metadata,
+      .current_sequence = 0,
+      .recent_terminal_tail = "",
+  };
+
+  sessions_.push_back(SessionEntry{
+      .id = *session_id,
+      .process = nullptr,
+      .runtime = nullptr,
+      .log_buffer =
+          std::make_unique<LogBuffer>(
+              EvidenceSourceRef{
+                  .kind = EvidenceSourceKind::ManagedLogSession,
+                  .session_id = *session_id,
+              },
+              request.limits),
+      .git_inspector = nullptr,
+      .file_watcher = nullptr,
+      .recovered_snapshot = std::move(snapshot),
+      .controller_client_id = std::nullopt,
+      .controller_kind = vibe::session::ControllerKind::Host,
+      .is_recovered = false,
+      .created_at_unix_ms = now_unix_ms,
+      .last_status_at_unix_ms = now_unix_ms,
+      .last_raw_output_at_unix_ms = std::nullopt,
+      .last_meaningful_output_at_unix_ms = std::nullopt,
+      .last_output_at_unix_ms = std::nullopt,
+      .last_activity_at_unix_ms = now_unix_ms,
+      .last_file_change_at_unix_ms = std::nullopt,
+      .last_git_change_at_unix_ms = std::nullopt,
+      .last_controller_change_at_unix_ms = std::nullopt,
+      .current_terminal_size = {},
+      .last_observed_status = vibe::session::SessionStatus::Running,
+      .last_observed_sequence = 0,
+      .last_traced_node_summary_key = std::nullopt,
+      .effective_environment = std::nullopt,
+  });
+
+  MaybeTraceNodeSummaryTransition(sessions_.back(), "create_log");
+  return BuildSummary(sessions_.back());
+}
+
+auto SessionManager::AppendLogStdout(const std::string& session_id,
+                                     std::string data,
+                                     const std::int64_t timestamp_unix_ms) -> bool {
+  SessionEntry* entry = FindEntry(session_id);
+  if (entry == nullptr || entry->log_buffer == nullptr) {
+    return false;
+  }
+  entry->log_buffer->AppendStdout(std::move(data), timestamp_unix_ms);
+  entry->last_raw_output_at_unix_ms = timestamp_unix_ms;
+  entry->last_meaningful_output_at_unix_ms = timestamp_unix_ms;
+  entry->last_output_at_unix_ms = timestamp_unix_ms;
+  entry->last_activity_at_unix_ms = timestamp_unix_ms;
+  return true;
+}
+
+auto SessionManager::AppendLogStderr(const std::string& session_id,
+                                     std::string data,
+                                     const std::int64_t timestamp_unix_ms) -> bool {
+  SessionEntry* entry = FindEntry(session_id);
+  if (entry == nullptr || entry->log_buffer == nullptr) {
+    return false;
+  }
+  entry->log_buffer->AppendStderr(std::move(data), timestamp_unix_ms);
+  entry->last_raw_output_at_unix_ms = timestamp_unix_ms;
+  entry->last_meaningful_output_at_unix_ms = timestamp_unix_ms;
+  entry->last_output_at_unix_ms = timestamp_unix_ms;
+  entry->last_activity_at_unix_ms = timestamp_unix_ms;
+  return true;
+}
+
 auto SessionManager::LoadPersistedSessions() -> std::size_t {
   if (session_store_ == nullptr) {
     return 0;
@@ -1434,6 +1569,86 @@ auto SessionManager::ReadFile(const std::string& session_id, const std::string& 
       .size_bytes = file_size,
       .truncated = file_size > static_cast<std::uint64_t>(max_bytes),
   };
+}
+
+auto SessionManager::TailEvidence(const std::string& session_id,
+                                  const EvidenceTailOptions& options) const
+    -> std::optional<EvidenceResult> {
+  const SessionEntry* entry = FindEntry(session_id);
+  if (entry == nullptr || entry->log_buffer == nullptr) {
+    return std::nullopt;
+  }
+
+  const LogBufferStats stats = entry->log_buffer->stats();
+  return MakeEvidenceResultFromEntries(
+      EvidenceSourceRef{
+          .kind = EvidenceSourceKind::ManagedLogSession,
+          .session_id = entry->id,
+      },
+      EvidenceOperation::Tail, "", entry->log_buffer->Tail(options.lines), stats);
+}
+
+auto SessionManager::RangeEvidence(const std::string& session_id,
+                                   const EvidenceRangeOptions& options) const
+    -> std::optional<EvidenceResult> {
+  const SessionEntry* entry = FindEntry(session_id);
+  if (entry == nullptr || entry->log_buffer == nullptr) {
+    return std::nullopt;
+  }
+
+  const EvidenceSourceRef source{
+      .kind = EvidenceSourceKind::ManagedLogSession,
+      .session_id = entry->id,
+  };
+  const LogBufferStats stats = entry->log_buffer->stats();
+  EvidenceResult result = MakeEvidenceResultFromEntries(
+      source, EvidenceOperation::Range, "",
+      entry->log_buffer->Range(options.revision_start, options.revision_end, options.limit),
+      stats);
+  result.truncated = options.revision_start < stats.oldest_revision && stats.dropped_entries > 0;
+  return result;
+}
+
+auto SessionManager::SearchEvidence(const std::string& session_id,
+                                    const EvidenceSearchOptions& options) const
+    -> std::optional<EvidenceResult> {
+  const SessionEntry* entry = FindEntry(session_id);
+  if (entry == nullptr || entry->log_buffer == nullptr) {
+    return std::nullopt;
+  }
+
+  const EvidenceSourceRef source{
+      .kind = EvidenceSourceKind::ManagedLogSession,
+      .session_id = entry->id,
+  };
+  const LogBufferStats stats = entry->log_buffer->stats();
+  LogBufferSearchResult search = entry->log_buffer->Search(options.query, options.limit);
+  EvidenceResult result = MakeEvidenceResultFromEntries(
+      source, EvidenceOperation::Search, options.query, std::move(search.entries), stats);
+  result.highlights = std::move(search.highlights);
+  result.truncated = search.truncated;
+  return result;
+}
+
+auto SessionManager::ContextEvidence(const std::string& session_id,
+                                     const EvidenceContextOptions& options) const
+    -> std::optional<EvidenceResult> {
+  const SessionEntry* entry = FindEntry(session_id);
+  if (entry == nullptr || entry->log_buffer == nullptr) {
+    return std::nullopt;
+  }
+
+  const EvidenceSourceRef source{
+      .kind = EvidenceSourceKind::ManagedLogSession,
+      .session_id = entry->id,
+  };
+  const LogBufferStats stats = entry->log_buffer->stats();
+  if (!entry->log_buffer->ContainsRevision(options.revision)) {
+    return MakeBufferExhaustedEvidenceResult(source, EvidenceOperation::Context, stats);
+  }
+  return MakeEvidenceResultFromEntries(
+      source, EvidenceOperation::Context, "",
+      entry->log_buffer->Context(options.revision, options.before, options.after), stats);
 }
 
 auto SessionManager::GetSessionEnv(const std::string& session_id) const

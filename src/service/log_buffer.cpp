@@ -65,6 +65,66 @@ auto LogBuffer::Tail(const std::size_t limit, const bool include_partial) const
   return tail;
 }
 
+auto LogBuffer::Range(const std::uint64_t revision_start,
+                      const std::uint64_t revision_end,
+                      const std::size_t limit) const -> std::vector<EvidenceEntry> {
+  if (limit == 0 || entries_.empty() || revision_start > revision_end) {
+    return {};
+  }
+
+  const std::uint64_t oldest_revision = entries_.front().revision;
+  const std::uint64_t latest_revision = entries_.back().revision;
+  if (revision_end < oldest_revision || revision_start > latest_revision) {
+    return {};
+  }
+
+  const std::uint64_t clamped_start = std::max(revision_start, oldest_revision);
+  const std::uint64_t clamped_end = std::min(revision_end, latest_revision);
+  const std::size_t start_index = static_cast<std::size_t>(clamped_start - oldest_revision);
+  const std::size_t end_index = static_cast<std::size_t>(clamped_end - oldest_revision);
+
+  std::vector<EvidenceEntry> entries;
+  const std::size_t count = std::min(limit, end_index - start_index + 1U);
+  entries.reserve(count);
+  for (std::size_t offset = 0; offset < count; ++offset) {
+    entries.push_back(entries_[start_index + offset]);
+  }
+  return entries;
+}
+
+auto LogBuffer::Search(const std::string_view query, const std::size_t limit) const
+    -> LogBufferSearchResult {
+  LogBufferSearchResult result;
+  if (query.empty() || limit == 0) {
+    return result;
+  }
+
+  for (const EvidenceEntry& entry : entries_) {
+    std::size_t offset = entry.text.find(query);
+    if (offset == std::string::npos) {
+      continue;
+    }
+
+    if (result.entries.size() >= limit) {
+      result.truncated = true;
+      break;
+    }
+
+    result.entries.push_back(entry);
+    while (offset != std::string::npos) {
+      result.highlights.push_back(EvidenceHighlight{
+          .entry_id = entry.entry_id,
+          .start = offset,
+          .length = query.size(),
+          .kind = EvidenceHighlightKind::Match,
+      });
+      offset = entry.text.find(query, offset + query.size());
+    }
+  }
+
+  return result;
+}
+
 auto LogBuffer::Context(const std::uint64_t revision,
                         const std::size_t before,
                         const std::size_t after) const -> std::vector<EvidenceEntry> {

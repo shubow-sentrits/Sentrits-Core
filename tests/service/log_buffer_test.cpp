@@ -144,6 +144,68 @@ TEST(LogBufferTest, ContextUsesRevisionWindow) {
   EXPECT_FALSE(buffer.ContainsRevision(9));
 }
 
+TEST(LogBufferTest, RangeReturnsClampedRevisionWindow) {
+  LogBuffer buffer(MakeSource(), LogBufferLimits{.max_bytes = 1024, .max_entries = 3});
+
+  buffer.AppendStdout("one\n", 1000);
+  buffer.AppendStdout("two\n", 1001);
+  buffer.AppendStdout("three\n", 1002);
+  buffer.AppendStdout("four\n", 1003);
+
+  const std::vector<EvidenceEntry> range = buffer.Range(1, 4, 10);
+  ASSERT_EQ(range.size(), 3U);
+  EXPECT_EQ(range[0].revision, 2U);
+  EXPECT_EQ(range[1].revision, 3U);
+  EXPECT_EQ(range[2].revision, 4U);
+}
+
+TEST(LogBufferTest, RangeRespectsLimit) {
+  LogBuffer buffer(MakeSource(), LogBufferLimits{.max_bytes = 1024, .max_entries = 100});
+
+  buffer.AppendStdout("one\n", 1000);
+  buffer.AppendStdout("two\n", 1001);
+  buffer.AppendStdout("three\n", 1002);
+
+  const std::vector<EvidenceEntry> range = buffer.Range(1, 3, 2);
+  ASSERT_EQ(range.size(), 2U);
+  EXPECT_EQ(range[0].revision, 1U);
+  EXPECT_EQ(range[1].revision, 2U);
+}
+
+TEST(LogBufferTest, SearchReturnsMatchingEntriesAndHighlights) {
+  LogBuffer buffer(MakeSource(), LogBufferLimits{.max_bytes = 1024, .max_entries = 100});
+
+  buffer.AppendStdout("alpha beta alpha\n", 1000);
+  buffer.AppendStdout("gamma\n", 1001);
+  buffer.AppendStderr("beta failure\n", 1002);
+
+  const LogBufferSearchResult result = buffer.Search("alpha", 10);
+  EXPECT_FALSE(result.truncated);
+  ASSERT_EQ(result.entries.size(), 1U);
+  EXPECT_EQ(result.entries[0].entry_id, "log:log_test:rev:1");
+  EXPECT_EQ(result.entries[0].text, "alpha beta alpha");
+  ASSERT_EQ(result.highlights.size(), 2U);
+  EXPECT_EQ(result.highlights[0].entry_id, "log:log_test:rev:1");
+  EXPECT_EQ(result.highlights[0].start, 0U);
+  EXPECT_EQ(result.highlights[0].length, 5U);
+  EXPECT_EQ(result.highlights[1].start, 11U);
+}
+
+TEST(LogBufferTest, SearchLimitTruncatesByMatchingEntry) {
+  LogBuffer buffer(MakeSource(), LogBufferLimits{.max_bytes = 1024, .max_entries = 100});
+
+  buffer.AppendStdout("match one\n", 1000);
+  buffer.AppendStdout("skip\n", 1001);
+  buffer.AppendStdout("match two\n", 1002);
+
+  const LogBufferSearchResult result = buffer.Search("match", 1);
+  EXPECT_TRUE(result.truncated);
+  ASSERT_EQ(result.entries.size(), 1U);
+  EXPECT_EQ(result.entries[0].revision, 1U);
+  ASSERT_EQ(result.highlights.size(), 1U);
+  EXPECT_EQ(result.highlights[0].entry_id, "log:log_test:rev:1");
+}
+
 TEST(LogBufferTest, ContextClampsWhenBeforeExceedsAvailableEntries) {
   LogBuffer buffer(MakeSource(), LogBufferLimits{.max_bytes = 1024, .max_entries = 100});
 
