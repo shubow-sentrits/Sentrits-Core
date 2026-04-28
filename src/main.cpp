@@ -738,7 +738,7 @@ void PrintUsage() {
             << "  sentrits serve [--admin-host HOST] [--admin-port PORT]"
                " [--remote-host HOST] [--remote-port PORT]"
                " [--remote-cert PATH] [--remote-key PATH]"
-               " [--no-udp-discovery|--no-discovery]\n"
+               " [--datadir PATH] [--no-udp-discovery|--no-discovery]\n"
             << "  sentrits service install|print\n"
             << "  sentrits local-pty [command [args...]]\n"
             << "  sentrits session list [--host HOST] [--port PORT] [--json]\n"
@@ -840,6 +840,22 @@ auto RecordToJsonValue(const vibe::cli::ListedRecord& record) -> json::value {
     object["commandShell"] = *record.command_shell;
   }
   return object;
+}
+
+void CopyNonEmptyProviderCommands(const json::object& source, json::object& destination) {
+  const auto* provider_commands_value = source.if_contains("providerCommands");
+  if (provider_commands_value == nullptr || !provider_commands_value->is_object()) {
+    return;
+  }
+
+  const auto& provider_commands = provider_commands_value->as_object();
+  for (const std::string_view key : {"codex", "claude"}) {
+    const auto* command_value = provider_commands.if_contains(key);
+    if (command_value != nullptr && command_value->is_array() &&
+        !command_value->as_array().empty()) {
+      destination[key] = *command_value;
+    }
+  }
 }
 
 void PrintSessionListHuman(const std::vector<vibe::cli::ListedSession>& sessions) {
@@ -1259,8 +1275,7 @@ auto main(const int argc, char** argv) -> int {
   }
 
   if (argc >= 2 && std::string(argv[1]) == "serve") {
-    const auto storage_root = vibe::net::DefaultStorageRoot();
-    ScopedServeLogMirror serve_log_mirror(storage_root);
+    auto storage_root = vibe::net::DefaultStorageRoot();
     std::string admin_host = std::string(vibe::store::kDefaultAdminHost);
     std::uint16_t admin_port = vibe::store::kDefaultAdminPort;
     std::string remote_host = std::string(vibe::store::kDefaultRemoteHost);
@@ -1315,6 +1330,11 @@ auto main(const int argc, char** argv) -> int {
         index += 2;
         continue;
       }
+      if (argument == "--datadir" && index + 1 < argc) {
+        storage_root = std::filesystem::path(argv[index + 1]);
+        index += 2;
+        continue;
+      }
       if (argument == "--no-udp-discovery" || argument == "--no-discovery") {
         enable_discovery = false;
         index += 1;
@@ -1332,32 +1352,43 @@ auto main(const int argc, char** argv) -> int {
 
     std::string hub_url;
     std::string hub_token;
-    {
-      const vibe::store::FileHostConfigStore host_config_store{storage_root};
-      if (const auto host_identity = host_config_store.LoadHostIdentity(); host_identity.has_value()) {
-        if (!admin_host_explicit) {
-          admin_host = host_identity->admin_host;
-        }
-        if (!admin_port_explicit) {
-          admin_port = host_identity->admin_port;
-        }
-        if (!remote_host_explicit) {
-          remote_host = host_identity->remote_host;
-        }
-        if (!remote_port_explicit) {
-          remote_port = host_identity->remote_port;
-        }
-        if (host_identity->hub_url.has_value()) {
-          hub_url = *host_identity->hub_url;
-        }
-        if (host_identity->hub_token.has_value()) {
-          hub_token = *host_identity->hub_token;
-        }
+    vibe::store::FileHostConfigStore host_config_store{storage_root};
+    if (const auto host_identity = host_config_store.LoadHostIdentity(); host_identity.has_value()) {
+      if (!admin_host_explicit) {
+        admin_host = host_identity->admin_host;
+      }
+      if (!admin_port_explicit) {
+        admin_port = host_identity->admin_port;
+      }
+      if (!remote_host_explicit) {
+        remote_host = host_identity->remote_host;
+      }
+      if (!remote_port_explicit) {
+        remote_port = host_identity->remote_port;
+      }
+      if (host_identity->hub_url.has_value()) {
+        hub_url = *host_identity->hub_url;
+      }
+      if (host_identity->hub_token.has_value()) {
+        hub_token = *host_identity->hub_token;
       }
     }
 
+    auto host_identity =
+        host_config_store.LoadHostIdentity().value_or(vibe::store::MakeDefaultHostIdentity());
+    host_identity.admin_host = admin_host;
+    host_identity.admin_port = admin_port;
+    host_identity.remote_host = remote_host;
+    host_identity.remote_port = remote_port;
+    if (!host_config_store.SaveHostIdentity(host_identity)) {
+      std::cerr << "failed to save host listener config under "
+                << storage_root.string() << '\n';
+      return 1;
+    }
+
+    ScopedServeLogMirror serve_log_mirror(storage_root);
     vibe::net::HttpServer server(admin_host, admin_port, remote_host, remote_port,
-                                 remote_tls_override, enable_discovery);
+                                 storage_root, remote_tls_override, enable_discovery);
     server.EnableHubIntegration(hub_url, hub_token);
     server.EnableHubControlChannel(hub_url, hub_token);
     sigset_t signal_set;
@@ -1940,11 +1971,9 @@ auto main(const int argc, char** argv) -> int {
       payload["adminPort"] = obj.contains("adminPort") ? obj.at("adminPort") : json::value(vibe::store::kDefaultAdminPort);
       payload["remoteHost"] = obj.contains("remoteHost") ? obj.at("remoteHost") : json::value(std::string(vibe::store::kDefaultRemoteHost));
       payload["remotePort"] = obj.contains("remotePort") ? obj.at("remotePort") : json::value(vibe::store::kDefaultRemotePort);
-      if (obj.contains("providerCommands")) {
-        const auto& cmds = obj.at("providerCommands").as_object();
-        json::object provider_commands;
-        if (cmds.contains("codex")) { provider_commands["codex"] = cmds.at("codex"); }
-        if (cmds.contains("claude")) { provider_commands["claude"] = cmds.at("claude"); }
+      json::object provider_commands;
+      CopyNonEmptyProviderCommands(obj, provider_commands);
+      if (!provider_commands.empty()) {
         payload["providerCommands"] = std::move(provider_commands);
       }
       const auto result = vibe::cli::PostHostConfig(options->endpoint, json::serialize(payload));
@@ -1987,15 +2016,11 @@ auto main(const int argc, char** argv) -> int {
       payload["remoteHost"] = obj.contains("remoteHost") ? obj.at("remoteHost") : json::value(std::string(vibe::store::kDefaultRemoteHost));
       payload["remotePort"] = obj.contains("remotePort") ? obj.at("remotePort") : json::value(vibe::store::kDefaultRemotePort);
       json::object provider_commands;
-      if (obj.contains("providerCommands")) {
-        const auto& cmds = obj.at("providerCommands").as_object();
-        if (cmds.contains("codex")) { provider_commands["codex"] = cmds.at("codex"); }
-        if (cmds.contains("claude")) { provider_commands["claude"] = cmds.at("claude"); }
-      }
+      CopyNonEmptyProviderCommands(obj, provider_commands);
       const std::string provider_key =
           (*options->provider == vibe::session::ProviderType::Codex) ? "codex" : "claude";
       if (subcommand == "clear-provider-command") {
-        provider_commands[provider_key] = json::array{};
+        provider_commands.erase(provider_key);
       } else {
         json::array command_array;
         for (const auto& token : options->positionals) {
@@ -2003,7 +2028,9 @@ auto main(const int argc, char** argv) -> int {
         }
         provider_commands[provider_key] = std::move(command_array);
       }
-      payload["providerCommands"] = std::move(provider_commands);
+      if (!provider_commands.empty()) {
+        payload["providerCommands"] = std::move(provider_commands);
+      }
       const auto result = vibe::cli::PostHostConfig(options->endpoint, json::serialize(payload));
       if (!result.has_value()) {
         std::cerr << "failed to update provider command\n";
