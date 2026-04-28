@@ -2,6 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -9,6 +12,13 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <boost/asio/connect.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/core/buffers_to_string.hpp>
+#include <boost/beast/http.hpp>
+#include <boost/beast/websocket.hpp>
 #include <gtest/gtest.h>
 
 namespace vibe::net {
@@ -135,6 +145,226 @@ TEST(HubControlChannelTest, StartAndStopAreIdempotent) {
   server_done.store(true);
   server_thread.join();
   ::close(server_fd);
+}
+
+// ---------------------------------------------------------------------------
+// Relay bridge end-to-end: control channel → relay.requested → bridge → pipe
+// ---------------------------------------------------------------------------
+
+// Minimal server-side WS connection transferred to the test after the bridge
+// connects. The server thread stores the connection here then idles; the test
+// thread uses it for read/write verification.
+struct WsHolder {
+  std::mutex mu;
+  std::condition_variable cv;
+  std::unique_ptr<boost::beast::websocket::stream<boost::asio::ip::tcp::socket>> conn;
+  bool ready{false};
+  std::atomic<bool> done{false};
+};
+
+TEST(HubControlChannelTest, RelayBridgePipesBytes) {
+  namespace asio = boost::asio;
+  namespace beast = boost::beast;
+  namespace http = beast::http;
+  namespace websocket = beast::websocket;
+  using tcp = asio::ip::tcp;
+
+  using WsStream = websocket::stream<tcp::socket>;
+
+  // Hub relay connection (bridge's hub-side WS connects to this server)
+  WsHolder hub_relay_holder;
+  // Local session connection (bridge's session-side WS connects to this server)
+  WsHolder session_holder;
+
+  // ---- Fake Hub server: handles /hosts/stream and /relay/host/* ----
+  // Uses the same non-blocking acceptor pattern as StartAndStopAreIdempotent.
+  asio::io_context hub_ioc;
+  tcp::acceptor hub_acceptor(hub_ioc,
+                              tcp::endpoint(asio::ip::address_v4::loopback(), 0),
+                              /*reuse_addr=*/true);
+  hub_acceptor.non_blocking(true);
+  const uint16_t hub_port = hub_acceptor.local_endpoint().port();
+  std::atomic<bool> hub_done{false};
+
+  std::thread hub_thread([&]() {
+    while (!hub_done.load()) {
+      tcp::socket sock(hub_ioc);
+      boost::system::error_code ec;
+      hub_acceptor.accept(sock, ec);
+      if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      if (ec) break;
+
+      // Each connection handled in its own thread (control stream must stay
+      // alive concurrently with the relay host connection).
+      std::thread([&, s = std::move(sock)]() mutable {
+        beast::flat_buffer buf;
+        http::request<http::string_body> req;
+        boost::system::error_code hec;
+        http::read(s, buf, req, hec);
+        if (hec) return;
+
+        const std::string target(req.target());
+        if (target.find("/hosts/stream") != std::string::npos) {
+          // Control stream: accept WS, send relay.requested, keep alive.
+          WsStream ws(std::move(s));
+          ws.accept(req, hec);
+          if (hec) return;
+          const std::string msg =
+              R"({"type":"relay.requested","channel_id":"ch_test","session_id":"s_test"})";
+          ws.text(true);
+          ws.write(asio::buffer(msg), hec);
+          // Keep the control WS alive for the duration of the test.
+          while (!hub_done.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          }
+        } else if (target.find("/relay/host/") != std::string::npos) {
+          // Relay host endpoint: the bridge connects here.
+          auto ws = std::make_unique<WsStream>(std::move(s));
+          ws->accept(req, hec);
+          if (hec) return;
+          {
+            std::lock_guard lock(hub_relay_holder.mu);
+            hub_relay_holder.conn = std::move(ws);
+            hub_relay_holder.ready = true;
+          }
+          hub_relay_holder.cv.notify_one();
+          // Keep the thread (and the accepted socket) alive until test is done.
+          while (!hub_relay_holder.done.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+        }
+      }).detach();
+    }
+  });
+
+  // ---- Fake local session server ----
+  asio::io_context session_ioc;
+  tcp::acceptor session_acceptor(session_ioc,
+                                  tcp::endpoint(asio::ip::address_v4::loopback(), 0),
+                                  /*reuse_addr=*/true);
+  session_acceptor.non_blocking(true);
+  const uint16_t session_port = session_acceptor.local_endpoint().port();
+  std::atomic<bool> session_done{false};
+
+  std::thread session_thread([&]() {
+    while (!session_done.load()) {
+      tcp::socket sock(session_ioc);
+      boost::system::error_code ec;
+      session_acceptor.accept(sock, ec);
+      if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      if (ec) break;
+
+      std::thread([&, s = std::move(sock)]() mutable {
+        beast::flat_buffer buf;
+        http::request<http::string_body> req;
+        boost::system::error_code hec;
+        http::read(s, buf, req, hec);
+        if (hec) return;
+        auto ws = std::make_unique<WsStream>(std::move(s));
+        ws->accept(req, hec);
+        if (hec) return;
+        {
+          std::lock_guard lock(session_holder.mu);
+          session_holder.conn = std::move(ws);
+          session_holder.ready = true;
+        }
+        session_holder.cv.notify_one();
+        while (!session_holder.done.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+      }).detach();
+      break;  // one session connection is enough
+    }
+  });
+
+  // ---- HubControlChannel under test ----
+  // issue_relay_token returns a fixed token; the fake session server doesn't
+  // validate it so any relay_ prefix value works.
+  const std::string hub_url = "http://127.0.0.1:" + std::to_string(hub_port);
+  HubControlChannel ch(
+      hub_url, "tok", session_port, /*local_tls=*/false,
+      [](const std::string&) { return std::string("relay_deadbeef"); },
+      HubControlChannelOptions{.reconnect_delay = std::chrono::seconds(1),
+                               .connect_timeout = std::chrono::seconds(5),
+                               .use_default_verify_paths = false,
+                               .ca_certificate_file = std::nullopt});
+  ch.Start();
+
+  // ---- Wait for bridge to establish both connections (timeout 5 s) ----
+  {
+    std::unique_lock lock(hub_relay_holder.mu);
+    ASSERT_TRUE(hub_relay_holder.cv.wait_for(
+        lock, std::chrono::seconds(5), [&] { return hub_relay_holder.ready; }))
+        << "bridge did not connect to Hub relay endpoint";
+  }
+  {
+    std::unique_lock lock(session_holder.mu);
+    ASSERT_TRUE(session_holder.cv.wait_for(lock, std::chrono::seconds(5),
+                                            [&] { return session_holder.ready; }))
+        << "bridge did not connect to local session endpoint";
+  }
+
+  // ---- Verify Hub-side → session-side ----
+  {
+    boost::system::error_code ec;
+    hub_relay_holder.conn->text(true);
+    hub_relay_holder.conn->write(asio::buffer(std::string("hello_to_session")), ec);
+    ASSERT_FALSE(ec) << "write to hub relay failed: " << ec.message();
+  }
+  {
+    beast::flat_buffer buf;
+    boost::system::error_code ec;
+    session_holder.conn->read(buf, ec);
+    ASSERT_FALSE(ec) << "read from session failed: " << ec.message();
+    EXPECT_EQ(beast::buffers_to_string(buf.data()), "hello_to_session");
+  }
+
+  // ---- Verify session-side → Hub-side ----
+  {
+    boost::system::error_code ec;
+    session_holder.conn->text(true);
+    session_holder.conn->write(asio::buffer(std::string("hello_to_hub")), ec);
+    ASSERT_FALSE(ec) << "write to session failed: " << ec.message();
+  }
+  {
+    beast::flat_buffer buf;
+    boost::system::error_code ec;
+    hub_relay_holder.conn->read(buf, ec);
+    ASSERT_FALSE(ec) << "read from hub relay failed: " << ec.message();
+    EXPECT_EQ(beast::buffers_to_string(buf.data()), "hello_to_hub");
+  }
+
+  // ---- Tear down ----
+  // Signal hub/session server handlers to stop keeping connections alive.
+  hub_relay_holder.done.store(true);
+  session_holder.done.store(true);
+  // Close relay connections so PipeWebSockets exits.
+  {
+    boost::system::error_code ignore;
+    if (hub_relay_holder.conn) hub_relay_holder.conn->close(websocket::close_code::normal, ignore);
+    if (session_holder.conn) session_holder.conn->close(websocket::close_code::normal, ignore);
+  }
+  // Drop the control WS so RunControlLoop's ws.read() returns and ch.Stop() can join.
+  hub_done.store(true);
+  session_done.store(true);
+  hub_acceptor.close();
+  session_acceptor.close();
+
+  ch.Stop();  // joins bridge threads; control loop exits after hub drops the WS
+
+  hub_thread.join();
+  session_thread.join();
+
+  // Reset before io_contexts are destroyed (WsHolders declared before hub_ioc/session_ioc,
+  // so their sockets would otherwise outlive the io_contexts they reference).
+  hub_relay_holder.conn.reset();
+  session_holder.conn.reset();
 }
 
 // ---------------------------------------------------------------------------

@@ -129,18 +129,17 @@ class FakeHttpsHubServer {
  private:
   void Run() {
     try {
-      asio::io_context io_context;
       ssl::context ssl_context(ssl::context::tls_server);
       ssl_context.use_certificate_chain_file(cert_path_.string());
       ssl_context.use_private_key_file(key_path_.string(), ssl::context::pem);
 
-      tcp::acceptor acceptor(io_context, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+      tcp::acceptor acceptor(io_context_, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
       acceptor.non_blocking(true);
       port_ = acceptor.local_endpoint().port();
       acceptor_.emplace(std::move(acceptor));
       started_.store(true);
 
-      tcp::socket socket(io_context);
+      tcp::socket socket(io_context_);
       while (!stop_requested_.load()) {
         boost::system::error_code accept_error;
         acceptor_->accept(socket, accept_error);
@@ -191,6 +190,7 @@ class FakeHttpsHubServer {
 
   std::filesystem::path cert_path_;
   std::filesystem::path key_path_;
+  asio::io_context io_context_;  // must outlive acceptor_
   std::atomic<bool> started_{false};
   std::atomic<bool> stop_requested_{false};
   std::thread thread_;
