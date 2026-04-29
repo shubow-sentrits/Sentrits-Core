@@ -46,13 +46,13 @@ enum class SessionCategory {
 }
 
 struct CreateSessionRequest {
-  vibe::session::ProviderType provider;
-  std::string workspace_root;
-  std::string title;
-  std::optional<std::string> conversation_id;
-  std::optional<std::vector<std::string>> command_argv;
-  std::optional<std::string> command_shell;
-  std::vector<std::string> group_tags;
+  vibe::session::ProviderType provider{vibe::session::ProviderType::Codex};
+  std::string workspace_root{};
+  std::string title{};
+  std::optional<std::string> conversation_id{std::nullopt};
+  std::optional<std::vector<std::string>> command_argv{std::nullopt};
+  std::optional<std::string> command_shell{std::nullopt};
+  std::vector<std::string> group_tags{};
   // Environment configuration for this session.
   std::optional<vibe::session::EnvMode> env_mode{std::nullopt};
   std::unordered_map<std::string, std::string> environment_overrides{};
@@ -60,11 +60,11 @@ struct CreateSessionRequest {
 };
 
 struct LogSessionCreateRequest {
-  std::string workspace_root;
-  std::string title;
-  std::optional<std::vector<std::string>> command_argv;
-  std::optional<std::string> command_shell;
-  std::vector<std::string> group_tags;
+  std::string workspace_root{};
+  std::string title{};
+  std::optional<std::vector<std::string>> command_argv{std::nullopt};
+  std::optional<std::string> command_shell{std::nullopt};
+  std::vector<std::string> group_tags{};
   std::optional<vibe::session::EnvMode> env_mode{std::nullopt};
   std::unordered_map<std::string, std::string> environment_overrides{};
   std::optional<std::string> env_file_path{std::nullopt};

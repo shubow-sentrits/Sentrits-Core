@@ -35,14 +35,14 @@ struct HttpRouteContext {
   vibe::store::HostConfigStore* host_config_store{nullptr};
   vibe::net::HostAdmin* host_admin{nullptr};
   vibe::service::ObservationStore* observation_store{nullptr};
-  std::function<void(const vibe::service::ObservationEvent&)> observation_event_sink;
-  std::filesystem::path storage_root;
-  std::string client_address;
+  std::function<void(const vibe::service::ObservationEvent&)> observation_event_sink{};
+  std::filesystem::path storage_root{};
+  std::string client_address{};
   bool is_local_request{false};
   bool remote_tls_enabled{false};
-  std::string remote_listener_host;
+  std::string remote_listener_host{};
   std::uint16_t remote_listener_port{0};
-  std::string remote_tls_certificate_path;
+  std::string remote_tls_certificate_path{};
   ListenerRole listener_role{ListenerRole::RemoteClient};
 };
 
