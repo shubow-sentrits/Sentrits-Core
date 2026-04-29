@@ -6,6 +6,62 @@ Define the MVP for a new central service, `Sentrits-Hub`, that enables internet
 connectivity for Sentrits hosts and clients without taking ownership of session
 state, replay, authorization, or control flow away from `Sentrits-Core`.
 
+## Current Status Snapshot (2026-04-28)
+
+This plan is the architectural source of truth, but current implementation
+status matters for sequencing.
+
+### MVP 1 complete
+
+- `Sentrits-Hub` Phase 1 control-plane surfaces exist and are tested:
+  - account auth
+  - device registration
+  - host registration
+  - heartbeat / presence
+  - host listing
+- `Sentrits-Core` outbound Hub client:
+  - `hub_url` / `hub_token` in `HostIdentity`
+  - outbound heartbeat thread
+  - session snapshot collected on the owning `io_context` via `asio::post`
+  - HTTPS path with peer verification and hostname verification
+- Hub DB-backed integration coverage: host ownership, token rotation,
+  heartbeat replacement, online/offline computation
+
+### MVP 2A in progress (host-side relay complete)
+
+What is done as of 2026-04-28:
+
+- Core `HubControlChannel`: persistent control WS to Hub `/api/v1/hosts/stream`
+  - fully async (Beast `async_read` + `ioc.run()`); `Stop()` is instantaneous
+  - sends `session.inventory` on connect; Hub persists it via `UpdateHostHeartbeat`
+  - spawns relay bridge threads on `relay.requested`; bridges are also async
+    and stop cleanly with `Stop()`
+  - local TLS flag correctly selects WSS/verify-none for loopback session side
+- Hub control stream (`handleHostStream`): reads `session.inventory`, updates DB
+- Hub relay host endpoint (`/api/v1/relay/host/{channel_id}`): accepts host bridge
+- Hub relay token store: single-use, 30-second TTL, session-path-scoped tokens
+- All of the above are covered by unit and integration tests
+
+What is not done yet (remaining for MVP 2A):
+
+- Hub client-facing relay request endpoint: client calls Hub to request relay for
+  a session → Hub sends `relay.requested` to host over control WS → host bridge
+  connects → bytes flow end-to-end
+- End-to-end relay integration test (client ↔ Hub relay ↔ host session)
+- Any internet pairing flow
+- Any mobile Hub client/service layer
+
+Most important planning correction from current code and iOS review:
+
+- the existing iOS client still uses HTTP REST for session list, snapshot, and
+  pairing, and WebSocket for live session streaming/input
+- therefore a WebSocket-only relay is a valid MVP 2 transport proof, but it is
+  not yet a complete internet replay/attach solution by itself
+- the plan must distinguish:
+  - `MVP 2A`: relay transport proof over WebSocket attach
+  - `MVP 2B`: full replay-capable internet attach, which requires the HTTP path
+    needed by the current clients
+
 ## Product Direction
 
 Sentrits should follow a responsibility split driven by real usage patterns,
@@ -331,30 +387,56 @@ Definition of done:
 - [x] Client can list hosts associated with its account
 - [x] Core works normally if Hub endpoint is unreachable
 
-### MVP 2: Hub Relay Attach and Replay
+### MVP 2A: Hub Relay Transport Proof
 
-Relay-first is the MVP-A path. Hub is a dumb transport layer while the host
-remains the authority for replay, attach, and control.
+Relay-first is still the MVP-A path, but the first relay slice should be framed
+honestly: it proves the Hub/Core/client transport seam before claiming complete
+internet replay parity.
 
-- [ ] Relay channels created by Hub for host/client pair
-- [ ] Relay forwards opaque bytes only
-- [ ] Relay does not decode session protocol
-- [ ] Relay does not inspect or store session payload
-- [ ] Host/client protocol above relay reuses current host attach semantics
-- [ ] Reconnect over relay still resumes existing host session
-- [ ] Replay remains host-owned and sequence-based over relay:
+- [x] Relay channels created by Hub for host/client pair
+- [x] Relay forwards opaque bytes only
+- [x] Relay does not decode session protocol
+- [x] Relay does not inspect or store session payload
+- [x] Core opens host-side relay connection in response to Hub relay request
+- [ ] Existing host WebSocket attach path can be reached through relay
+      _(host bridge is complete; missing: Hub client-facing relay request endpoint)_
+- [ ] Existing live session stream can traverse relay unchanged
+      _(blocked by same missing client-facing endpoint)_
+
+Deliverable:
+- Internet WebSocket session attach works end-to-end over relay without
+  changing current `Sentrits-Core` session semantics
+
+Definition of done:
+- [x] Relay forwards bytes opaquely between host and client
+- [x] Core host-side relay bridge can attach to an existing session by `session_id`
+- [ ] Existing session WebSocket protocol works over relay unchanged
+      _(end-to-end test pending; requires client-facing relay endpoint)_
+
+### MVP 2B: Replay-Capable Internet Attach
+
+This is the first slice that truly delivers replay/reconnect parity for the
+current clients. It requires the HTTP path used today for session inventory,
+snapshot, and pairing-related flows, not just the WebSocket path.
+
+- [ ] Client can query host session inventory over internet path
+- [ ] Client can fetch session snapshot over internet path
+- [ ] Client can fetch replay since sequence / revision over internet path
+- [ ] Reconnect over internet path resumes existing host session
+- [ ] Replay remains host-owned and sequence-based:
   - snapshot fetch
   - `GetOutputSince(...)`
   - reconnect by `session_id` + last known sequence
+- [ ] Hub remains transport/control-plane only; replay stays entirely on host
 
 Deliverable:
-- Internet attach works end-to-end over relay without changing current
-  `Sentrits-Core` replay or control semantics
+- Internet attach works with the same replay/reconnect semantics as LAN for the
+  currently supported clients
 
 Definition of done:
-- Relay forwards bytes opaquely between host and client
-- Reconnect over relay resumes existing host session by `session_id`
-- Replay catch-up works over relay using the existing Core sequence model
+- Client can fetch session inventory, snapshot, and replay over internet path
+- Reconnect resumes existing host session by `session_id`
+- Replay catch-up works using the existing Core sequence model
 
 ### MVP 3: End-to-End Trust and Pairing Over Internet
 
@@ -372,7 +454,7 @@ Host remains the sole trust authority.
       `hub_device_id` field to carry the Hub-issued device identity alongside
       the host-generated credentials
 - [ ] Hub never approves a pairing on behalf of the host
-- [ ] Hub `device_id` maps to the host's local pairing record after pairing completes
+- [ ] Hub `device_id` is stored as an optional `hub_device_id` field on the host's `PairingRecord` after pairing completes — it is attached metadata alongside the host-generated `device_id` and `bearer_token`, not a replacement
 - [ ] Pairing result is stored only in host local trusted-device store
 
 Deliverable:
@@ -384,25 +466,22 @@ Definition of done:
 - Hub `device_id` is associated with host pairing record post-approval
 - No pairing state is stored in Hub
 
-### MVP 4: Remote Session Attach / Replay / Control
+### MVP 4: Remote Session Control Parity
 
-Reuse current session model over the new transport.
+Reuse current session model over the new transport after replay-capable internet
+attach exists.
 
-- [ ] Client queries host session inventory after authentication
-- [ ] Client fetches snapshot for existing session
-- [ ] Client fetches replay since revision / sequence
 - [ ] Client attaches as observer by default
 - [ ] Client can explicitly request controller ownership
 - [ ] Host arbitrates control transfer
 - [ ] Disconnect + reconnect resumes from replay gap
-- [ ] Existing host replay model (`snapshot` + `GetOutputSince`) is reused directly
 - [ ] Mobile attach is optimized for inspect / decide / disconnect
 
 Deliverable:
 - Internet client behavior matches current LAN / localhost semantics
 
 Definition of done:
-- Client can list sessions, fetch snapshot, replay, attach, and control over internet
+- Client can attach and control over internet with the same host-owned rules as LAN
 - Disconnect does not kill the session; reconnect resumes by `session_id`
 - `device_id` (stable principal) and `client_id` (per-connection handle) remain
   distinct; controller semantics operate at `client_id` level, unchanged
@@ -485,6 +564,12 @@ Deliverable:
 - [ ] Implement Hub-backed client host listing
 - [ ] Implement APNs push plumbing
 - [ ] Verify: Core operates normally when Hub endpoint is unreachable
+- [ ] Finish minimum Phase 1 test gate before relay work:
+  - Hub ownership conflict integration test
+  - Hub heartbeat replacement integration test
+  - Core HTTPS verification test
+  - Core outbound heartbeat integration test
+  - one Core test covering `io_context` snapshot ownership model
 
 ### Phase 2: Minimal host-facing transport seam
 
@@ -500,24 +585,39 @@ needed to let the current runtime speak over Hub-mediated transports.
 - [ ] Attention events export via the outbound Hub client added in Phase 1 —
       Core pushes on state change; Hub polling is explicitly not used (host may
       be behind NAT)
-- [ ] First transport target is relay, not direct; replay and reconnect over
-      relay are the primary validation target
+- [ ] First transport target is relay, not direct
+- [ ] First relay validation target is WebSocket attach path, not full protocol parity
 
-### Phase 3: Relay attach, replay, and pairing
+### Phase 3: Relay transport proof (MVP 2A)
 
-- [ ] Add relay byte channel
-- [ ] Reuse same authenticated stream protocol over relay
-- [ ] Validate snapshot + replay resume over relay
+- [x] Add relay byte channel
+- [x] Add host-side control channel from Core to Hub
+- [x] Session inventory pushed over control channel on connect
+- [ ] Add Hub client-facing relay request endpoint (remaining blocker)
+- [ ] Reuse existing session WebSocket protocol over relay (end-to-end test)
+- [ ] Validate live attach over relay
+- [x] Keep Hub transport-only; no Hub protocol awareness above byte forwarding
+
+### Phase 4: Replay-capable internet attach (MVP 2B)
+
+- [ ] Add the HTTP path needed by current clients for session inventory,
+      snapshot, and replay fetch
+- [ ] Validate reconnect and replay catch-up over the internet path
+- [ ] Keep replay entirely host-owned; Hub remains control-plane / transport only
+
+### Phase 5: Internet pairing and trust completion
+
 - [ ] Add host-mediated remote pairing handshake
 - [ ] Persist approved device locally on host
+- [ ] Carry Hub `device_id` as metadata mapped to local pairing record
 
-### Phase 4: Notification-driven mobile flow
+### Phase 6: Notification-driven mobile flow
 
 - [ ] Emit host-side attention events
 - [ ] Push to mobile through Hub
 - [ ] Mobile deep-link to session inspect/attach
 
-### Phase 5: Reconnect and recovery polish
+### Phase 7: Reconnect and recovery polish
 
 - [ ] Resume by session id
 - [ ] Replay from last revision

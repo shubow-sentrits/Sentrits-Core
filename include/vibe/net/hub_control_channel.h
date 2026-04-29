@@ -4,6 +4,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -110,6 +111,7 @@ class HubControlChannel {
   // Bridge threads. Joined on Stop(); finished threads are reaped periodically.
   std::mutex bridges_mutex_;
   std::vector<std::thread> bridge_threads_;
+  std::vector<std::shared_ptr<boost::asio::io_context>> bridge_iocs_;
 };
 
 }  // namespace vibe::net

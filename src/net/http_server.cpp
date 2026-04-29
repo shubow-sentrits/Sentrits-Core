@@ -2736,13 +2736,19 @@ void HttpServer::EnableHubControlChannel(std::string hub_url, std::string hub_to
 
   HubControlChannelOptions opts;
   opts.list_sessions_fn = [this]() -> std::string {
+    if (io_context_ == nullptr) {
+      return "[]";
+    }
     auto promise =
         std::make_shared<std::promise<std::vector<vibe::service::SessionSummary>>>();
     auto future = promise->get_future();
     asio::post(*io_context_, [this, promise]() {
       promise->set_value(session_manager_.ListSessions());
     });
-    future.wait();
+    if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+      std::cerr << "[hub-ctrl] timed out collecting session inventory from io_context\n";
+      return "[]";
+    }
     const auto sessions = future.get();
     json::array arr;
     for (const auto& s : sessions) {

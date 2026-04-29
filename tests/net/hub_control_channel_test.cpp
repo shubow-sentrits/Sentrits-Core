@@ -23,6 +23,28 @@
 
 namespace vibe::net {
 
+namespace {
+
+auto CanBindLoopbackTcp() -> bool {
+  const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) {
+    return false;
+  }
+
+  int opt = 1;
+  ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0;
+  const bool ok = ::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0;
+  ::close(fd);
+  return ok;
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // RelayTokenStore tests
 // ---------------------------------------------------------------------------
@@ -98,6 +120,9 @@ TEST(HubControlChannelTest, StopBeforeStartIsSafe) {
 }
 
 TEST(HubControlChannelTest, StartAndStopAreIdempotent) {
+  if (!CanBindLoopbackTcp()) {
+    GTEST_SKIP() << "loopback TCP bind is not available in this environment";
+  }
   // Run a minimal non-blocking TCP server that accepts and immediately RSTs
   // each connection. This makes connect() + WS handshake fail in <1 ms,
   // putting the control loop into its cv_.wait_for reconnect delay where
@@ -164,6 +189,9 @@ struct WsHolder {
 };
 
 TEST(HubControlChannelTest, RelayBridgePipesBytes) {
+  if (!CanBindLoopbackTcp()) {
+    GTEST_SKIP() << "loopback TCP bind is not available in this environment";
+  }
   namespace asio = boost::asio;
   namespace beast = boost::beast;
   namespace http = beast::http;
@@ -367,6 +395,371 @@ TEST(HubControlChannelTest, RelayBridgePipesBytes) {
   // so their sockets would otherwise outlive the io_contexts they reference).
   hub_relay_holder.conn.reset();
   session_holder.conn.reset();
+}
+
+// ---------------------------------------------------------------------------
+// Stop() reliability: active control stream and active relay bridge
+// ---------------------------------------------------------------------------
+
+// Verifies that Stop() terminates cleanly even when the control WS is live and
+// the Hub never closes its side (i.e. ws.read() would block indefinitely without
+// the fd-shutdown fix).
+TEST(HubControlChannelTest, StopWithLiveControlStream) {
+  if (!CanBindLoopbackTcp()) {
+    GTEST_SKIP() << "loopback TCP bind is not available in this environment";
+  }
+  namespace asio = boost::asio;
+  namespace beast = boost::beast;
+  namespace http = beast::http;
+  namespace websocket = beast::websocket;
+  using tcp = asio::ip::tcp;
+
+  asio::io_context hub_ioc;
+  tcp::acceptor hub_acceptor(hub_ioc,
+                              tcp::endpoint(asio::ip::address_v4::loopback(), 0),
+                              /*reuse_addr=*/true);
+  hub_acceptor.non_blocking(true);
+  const uint16_t hub_port = hub_acceptor.local_endpoint().port();
+  std::atomic<bool> hub_done{false};
+  std::mutex conn_mu;
+  std::unique_ptr<websocket::stream<tcp::socket>> ctrl_conn;
+  std::condition_variable conn_cv;
+  bool conn_ready{false};
+
+  std::thread hub_thread([&]() {
+    while (!hub_done.load()) {
+      tcp::socket sock(hub_ioc);
+      boost::system::error_code ec;
+      hub_acceptor.accept(sock, ec);
+      if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      if (ec) break;
+      std::thread([&, s = std::move(sock)]() mutable {
+        beast::flat_buffer buf;
+        http::request<http::string_body> req;
+        boost::system::error_code hec;
+        http::read(s, buf, req, hec);
+        if (hec) return;
+        auto ws = std::make_unique<websocket::stream<tcp::socket>>(std::move(s));
+        ws->accept(req, hec);
+        if (hec) return;
+        {
+          std::lock_guard lock(conn_mu);
+          ctrl_conn = std::move(ws);
+          conn_ready = true;
+        }
+        conn_cv.notify_one();
+        // Hold WS open — Stop() must unblock ws.read() via fd shutdown.
+        while (!hub_done.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+      }).detach();
+      break;
+    }
+  });
+
+  const std::string hub_url = "http://127.0.0.1:" + std::to_string(hub_port);
+  HubControlChannel ch(
+      hub_url, "tok", 19996, /*local_tls=*/false,
+      [](const std::string&) { return std::string{}; },
+      HubControlChannelOptions{.reconnect_delay = std::chrono::seconds(30),
+                               .connect_timeout = std::chrono::seconds(5),
+                               .use_default_verify_paths = false,
+                               .ca_certificate_file = std::nullopt,
+                               .list_sessions_fn = {}});
+  ch.Start();
+
+  {
+    std::unique_lock lock(conn_mu);
+    ASSERT_TRUE(conn_cv.wait_for(lock, std::chrono::seconds(5), [&] { return conn_ready; }))
+        << "control WS did not connect";
+  }
+
+  // Control WS is now live. Stop() must unblock via fd shutdown and return.
+  hub_done.store(true);
+  hub_acceptor.close();
+  ch.Stop();  // must not hang
+
+  hub_thread.join();
+  ctrl_conn.reset();
+}
+
+// Verifies that Stop() terminates cleanly while a relay bridge is actively
+// piping bytes (both the hub-relay WS and local-session WS remain connected).
+TEST(HubControlChannelTest, StopWithActiveRelayBridge) {
+  if (!CanBindLoopbackTcp()) {
+    GTEST_SKIP() << "loopback TCP bind is not available in this environment";
+  }
+  namespace asio = boost::asio;
+  namespace beast = boost::beast;
+  namespace http = beast::http;
+  namespace websocket = beast::websocket;
+  using tcp = asio::ip::tcp;
+
+  WsHolder hub_relay_holder;
+  WsHolder session_holder;
+
+  asio::io_context hub_ioc;
+  tcp::acceptor hub_acceptor(hub_ioc,
+                              tcp::endpoint(asio::ip::address_v4::loopback(), 0),
+                              /*reuse_addr=*/true);
+  hub_acceptor.non_blocking(true);
+  const uint16_t hub_port = hub_acceptor.local_endpoint().port();
+  std::atomic<bool> hub_done{false};
+
+  std::thread hub_thread([&]() {
+    while (!hub_done.load()) {
+      tcp::socket sock(hub_ioc);
+      boost::system::error_code ec;
+      hub_acceptor.accept(sock, ec);
+      if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      if (ec) break;
+      std::thread([&, s = std::move(sock)]() mutable {
+        beast::flat_buffer buf;
+        http::request<http::string_body> req;
+        boost::system::error_code hec;
+        http::read(s, buf, req, hec);
+        if (hec) return;
+        const std::string target(req.target());
+        if (target.find("/hosts/stream") != std::string::npos) {
+          websocket::stream<tcp::socket> ws(std::move(s));
+          ws.accept(req, hec);
+          if (hec) return;
+          const std::string msg =
+              R"({"type":"relay.requested","channel_id":"ch_stop","session_id":"s_stop"})";
+          ws.text(true);
+          ws.write(asio::buffer(msg), hec);
+          while (!hub_done.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+        } else if (target.find("/relay/host/") != std::string::npos) {
+          auto ws = std::make_unique<websocket::stream<tcp::socket>>(std::move(s));
+          ws->accept(req, hec);
+          if (hec) return;
+          {
+            std::lock_guard lock(hub_relay_holder.mu);
+            hub_relay_holder.conn = std::move(ws);
+            hub_relay_holder.ready = true;
+          }
+          hub_relay_holder.cv.notify_one();
+          while (!hub_relay_holder.done.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+        }
+      }).detach();
+    }
+  });
+
+  asio::io_context session_ioc;
+  tcp::acceptor session_acceptor(session_ioc,
+                                  tcp::endpoint(asio::ip::address_v4::loopback(), 0),
+                                  /*reuse_addr=*/true);
+  session_acceptor.non_blocking(true);
+  const uint16_t session_port = session_acceptor.local_endpoint().port();
+  std::atomic<bool> session_done{false};
+
+  std::thread session_thread([&]() {
+    while (!session_done.load()) {
+      tcp::socket sock(session_ioc);
+      boost::system::error_code ec;
+      session_acceptor.accept(sock, ec);
+      if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      if (ec) break;
+      std::thread([&, s = std::move(sock)]() mutable {
+        beast::flat_buffer buf;
+        http::request<http::string_body> req;
+        boost::system::error_code hec;
+        http::read(s, buf, req, hec);
+        if (hec) return;
+        auto ws = std::make_unique<websocket::stream<tcp::socket>>(std::move(s));
+        ws->accept(req, hec);
+        if (hec) return;
+        {
+          std::lock_guard lock(session_holder.mu);
+          session_holder.conn = std::move(ws);
+          session_holder.ready = true;
+        }
+        session_holder.cv.notify_one();
+        while (!session_holder.done.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+      }).detach();
+      break;
+    }
+  });
+
+  const std::string hub_url = "http://127.0.0.1:" + std::to_string(hub_port);
+  HubControlChannel ch(
+      hub_url, "tok", session_port, /*local_tls=*/false,
+      [](const std::string&) { return std::string("relay_deadbeef"); },
+      HubControlChannelOptions{.reconnect_delay = std::chrono::seconds(30),
+                               .connect_timeout = std::chrono::seconds(5),
+                               .use_default_verify_paths = false,
+                               .ca_certificate_file = std::nullopt,
+                               .list_sessions_fn = {}});
+  ch.Start();
+
+  {
+    std::unique_lock lock(hub_relay_holder.mu);
+    ASSERT_TRUE(hub_relay_holder.cv.wait_for(
+        lock, std::chrono::seconds(5), [&] { return hub_relay_holder.ready; }))
+        << "bridge did not connect to Hub relay endpoint";
+  }
+  {
+    std::unique_lock lock(session_holder.mu);
+    ASSERT_TRUE(session_holder.cv.wait_for(lock, std::chrono::seconds(5),
+                                            [&] { return session_holder.ready; }))
+        << "bridge did not connect to local session endpoint";
+  }
+
+  // Both sides are live. Stop() must unblock PipeWebSockets via fd shutdown.
+  hub_relay_holder.done.store(true);
+  session_holder.done.store(true);
+  hub_done.store(true);
+  session_done.store(true);
+  hub_acceptor.close();
+  session_acceptor.close();
+
+  ch.Stop();  // must not hang even with live bridge sockets
+
+  hub_thread.join();
+  session_thread.join();
+  hub_relay_holder.conn.reset();
+  session_holder.conn.reset();
+}
+
+// Verifies that when local_tls_=true, the bridge uses WSS for the local side.
+// The local server intentionally speaks plain WS; the TLS handshake will fail,
+// which proves the code path was reached (the old code always used plain WS and
+// would have succeeded against a plain server regardless of the flag).
+TEST(HubControlChannelTest, LocalTlsFlagCausesWssAttemptToLocalSide) {
+  if (!CanBindLoopbackTcp()) {
+    GTEST_SKIP() << "loopback TCP bind is not available in this environment";
+  }
+  namespace asio = boost::asio;
+  namespace beast = boost::beast;
+  namespace http = beast::http;
+  namespace websocket = beast::websocket;
+  using tcp = asio::ip::tcp;
+
+  // Fake Hub: accepts control WS, sends relay.requested, then keeps the relay
+  // host WS open until the bridge fails to connect the local side and exits.
+  asio::io_context hub_ioc;
+  tcp::acceptor hub_acceptor(hub_ioc,
+                              tcp::endpoint(asio::ip::address_v4::loopback(), 0),
+                              /*reuse_addr=*/true);
+  hub_acceptor.non_blocking(true);
+  const uint16_t hub_port = hub_acceptor.local_endpoint().port();
+  std::atomic<bool> hub_done{false};
+  std::atomic<bool> relay_host_connected{false};
+
+  std::thread hub_thread([&]() {
+    while (!hub_done.load()) {
+      tcp::socket sock(hub_ioc);
+      boost::system::error_code ec;
+      hub_acceptor.accept(sock, ec);
+      if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      if (ec) break;
+      std::thread([&, s = std::move(sock)]() mutable {
+        beast::flat_buffer buf;
+        http::request<http::string_body> req;
+        boost::system::error_code hec;
+        http::read(s, buf, req, hec);
+        if (hec) return;
+        const std::string target(req.target());
+        if (target.find("/hosts/stream") != std::string::npos) {
+          websocket::stream<tcp::socket> ws(std::move(s));
+          ws.accept(req, hec);
+          if (hec) return;
+          const std::string msg =
+              R"({"type":"relay.requested","channel_id":"ch_tls","session_id":"s_tls"})";
+          ws.text(true);
+          ws.write(asio::buffer(msg), hec);
+          while (!hub_done.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+        } else if (target.find("/relay/host/") != std::string::npos) {
+          websocket::stream<tcp::socket> ws(std::move(s));
+          ws.accept(req, hec);
+          if (hec) return;
+          relay_host_connected.store(true);
+          while (!hub_done.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+          }
+        }
+      }).detach();
+    }
+  });
+
+  // Local "session" server: plain WS only. When the bridge tries TLS, the
+  // handshake fails at the TLS client-hello level, not the WS level.
+  asio::io_context session_ioc;
+  tcp::acceptor session_acceptor(session_ioc,
+                                  tcp::endpoint(asio::ip::address_v4::loopback(), 0),
+                                  /*reuse_addr=*/true);
+  session_acceptor.non_blocking(true);
+  const uint16_t session_port = session_acceptor.local_endpoint().port();
+  std::atomic<bool> session_done{false};
+  std::atomic<bool> session_got_connect{false};
+
+  std::thread session_thread([&]() {
+    while (!session_done.load()) {
+      tcp::socket sock(session_ioc);
+      boost::system::error_code ec;
+      session_acceptor.accept(sock, ec);
+      if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        continue;
+      }
+      if (ec) break;
+      // Record that something connected, then close it.
+      session_got_connect.store(true);
+      sock.close();
+      break;
+    }
+  });
+
+  const std::string hub_url = "http://127.0.0.1:" + std::to_string(hub_port);
+  HubControlChannel ch(
+      hub_url, "tok", session_port, /*local_tls=*/true,
+      [](const std::string&) { return std::string("relay_deadbeef"); },
+      HubControlChannelOptions{.reconnect_delay = std::chrono::seconds(30),
+                               .connect_timeout = std::chrono::seconds(2),
+                               .use_default_verify_paths = false,
+                               .ca_certificate_file = std::nullopt,
+                               .list_sessions_fn = {}});
+  ch.Start();
+
+  // Wait for the bridge to attempt the local connection (TLS handshake will fail).
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!session_got_connect.load() &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_TRUE(session_got_connect.load())
+      << "bridge did not attempt to connect to local session side";
+  EXPECT_TRUE(relay_host_connected.load())
+      << "bridge did not connect to Hub relay endpoint";
+
+  hub_done.store(true);
+  session_done.store(true);
+  hub_acceptor.close();
+  session_acceptor.close();
+  ch.Stop();
+
+  hub_thread.join();
+  session_thread.join();
 }
 
 // ---------------------------------------------------------------------------

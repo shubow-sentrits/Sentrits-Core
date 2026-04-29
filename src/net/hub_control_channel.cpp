@@ -4,6 +4,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/ssl.hpp>
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <random>
 #include <string>
@@ -235,52 +237,82 @@ auto ConnectWs(WsStream& ws, const ParsedUrl& url, const std::string& bearer_tok
   return true;
 }
 
-// Pipe bytes between two open WebSocket streams until either side closes.
-// Message type (text/binary) is preserved.
+// Pipe bytes between two open WebSocket streams using async I/O on a shared
+// io_context. Runs until either side closes, an error occurs, or should_stop()
+// returns true (polled every 100 ms via a steady_timer). Caller must call
+// ioc.run() after returning from this function — or this function runs ioc
+// internally (see below).
+//
+// This function runs ioc.run() internally and returns when piping is complete.
+// Both streams must be constructed with ioc.
 template <typename StreamA, typename StreamB>
-void PipeWebSockets(StreamA& a, StreamB& b) {
-  // We drive the pipe with alternating reads to keep it simple on a single
-  // thread. For MVP relay traffic this is sufficient; throughput is bounded
-  // by the slowest link, not CPU.
-  //
-  // We use the non-blocking peek approach: try to read from A with a short
-  // timeout; if nothing arrives, try B. This avoids starving one direction.
-  // For MVP simplicity we just alternate with no timeout — each read blocks
-  // until a frame or close, which is correct but may add latency when one
-  // direction is idle. Acceptable for MVP 2A.
-  //
-  // Real bidirectional pipe needs two threads. Use two threads.
-  std::atomic<bool> done{false};
+void PipeWebSocketsAsync(asio::io_context& ioc, StreamA& a, StreamB& b,
+                         std::function<bool()> should_stop) {
+  beast::flat_buffer buf_a, buf_b;
+  asio::steady_timer stop_timer(ioc);
 
-  auto forward = [&done](auto& src, auto& dst) {
-    boost::system::error_code ec;
-    beast::flat_buffer buf;
-    while (!done.load()) {
-      buf.clear();
-      src.read(buf, ec);
+  // Declared before lambdas so they can reference each other recursively.
+  std::function<void()> read_from_a;
+  std::function<void()> read_from_b;
+  std::function<void()> arm_stop_timer;
+
+  read_from_a = [&]() {
+    buf_a.clear();
+    a.async_read(buf_a, [&](boost::system::error_code ec, std::size_t) {
       if (ec) {
-        done.store(true);
+        stop_timer.cancel();
+        beast::get_lowest_layer(b).cancel();
         return;
       }
-      dst.text(src.got_text());
-      dst.write(buf.data(), ec);
-      if (ec) {
-        done.store(true);
+      b.text(a.got_text());
+      boost::system::error_code wec;
+      b.write(buf_a.data(), wec);
+      if (wec) {
+        stop_timer.cancel();
+        beast::get_lowest_layer(a).cancel();
         return;
       }
-    }
+      read_from_a();
+    });
   };
 
-  std::thread t([&]() { forward(a, b); });
-  forward(b, a);
-  if (t.joinable()) {
-    t.join();
-  }
+  read_from_b = [&]() {
+    buf_b.clear();
+    b.async_read(buf_b, [&](boost::system::error_code ec, std::size_t) {
+      if (ec) {
+        stop_timer.cancel();
+        beast::get_lowest_layer(a).cancel();
+        return;
+      }
+      a.text(b.got_text());
+      boost::system::error_code wec;
+      a.write(buf_b.data(), wec);
+      if (wec) {
+        stop_timer.cancel();
+        beast::get_lowest_layer(b).cancel();
+        return;
+      }
+      read_from_b();
+    });
+  };
 
-  // Best-effort close both sides.
-  boost::system::error_code ignore;
-  a.close(websocket::close_code::normal, ignore);
-  b.close(websocket::close_code::normal, ignore);
+  arm_stop_timer = [&]() {
+    stop_timer.expires_after(std::chrono::milliseconds(100));
+    stop_timer.async_wait([&](boost::system::error_code ec) {
+      if (ec) return;  // cancelled — either side closed or we already stopped
+      if (should_stop && should_stop()) {
+        beast::get_lowest_layer(a).cancel();
+        beast::get_lowest_layer(b).cancel();
+        return;
+      }
+      arm_stop_timer();
+    });
+  };
+
+  if (should_stop) arm_stop_timer();
+  read_from_a();
+  read_from_b();
+  ioc.run();
 }
 
 }  // namespace
@@ -313,10 +345,20 @@ void HubControlChannel::Start() {
 }
 
 void HubControlChannel::Stop() {
+  std::vector<std::shared_ptr<asio::io_context>> bridge_iocs;
   {
     std::lock_guard lock(mutex_);
     stop_ = true;
     if (current_ioc_) current_ioc_->stop();
+  }
+  {
+    std::lock_guard lock(bridges_mutex_);
+    bridge_iocs = bridge_iocs_;
+  }
+  for (const auto& ioc : bridge_iocs) {
+    if (ioc) {
+      ioc->stop();
+    }
   }
   cv_.notify_all();
   if (control_thread_.joinable()) {
@@ -347,6 +389,25 @@ void HubControlChannel::ReapFinishedBridges() {
       bridge_threads_.end());
 }
 
+// Dispatch a relay.requested message through the async read handler.
+// Called from within the io_context event loop (from async_read callback).
+static void HandleControlMessage(const beast::flat_buffer& buf,
+                                 std::function<void(const std::string&,
+                                                     const std::string&)> on_relay_requested) {
+  const std::string msg_str(static_cast<const char*>(buf.data().data()), buf.size());
+  try {
+    const auto obj = json::parse(msg_str).as_object();
+    const std::string type(obj.at("type").as_string());
+    if (type == "relay.requested") {
+      const std::string channel_id(obj.at("channel_id").as_string());
+      const std::string session_id(obj.at("session_id").as_string());
+      on_relay_requested(channel_id, session_id);
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "[hub-ctrl] malformed control message: " << e.what() << '\n';
+  }
+}
+
 void HubControlChannel::RunControlLoop() {
   const auto parsed = ParseUrl(hub_url_);
   if (!parsed.has_value()) {
@@ -360,7 +421,46 @@ void HubControlChannel::RunControlLoop() {
       if (stop_) return;
     }
 
-    // Connect the control channel WebSocket.
+    // Helper: send initial session inventory if configured.
+    auto maybe_send_inventory = [&](auto& ws) {
+      if (!options_.list_sessions_fn) return;
+      const std::string sessions_json = options_.list_sessions_fn();
+      json::object inv_msg;
+      inv_msg["type"] = "session.inventory";
+      inv_msg["sessions"] = json::parse(sessions_json);
+      boost::system::error_code ec;
+      ws.text(true);
+      ws.write(asio::buffer(json::serialize(inv_msg)), ec);
+      if (ec) {
+        std::cerr << "[hub-ctrl] failed to send session inventory: " << ec.message() << '\n';
+      }
+    };
+
+    // Helper: run the async read loop on an already-connected websocket stream.
+    // Uses ioc.run(); the caller must have stored current_ioc_ = &ioc beforehand.
+    auto run_read_loop = [&](auto& ws, auto& ioc) {
+      beast::flat_buffer buf;
+      std::function<void()> post_read;
+      post_read = [&]() {
+        buf.clear();
+        ws.async_read(buf, [&](boost::system::error_code ec, std::size_t) {
+          if (ec) {
+            if (ec != asio::error::operation_aborted) {
+              std::cerr << "[hub-ctrl] control channel read error: " << ec.message() << '\n';
+            }
+            return;
+          }
+          HandleControlMessage(buf,
+              [this](const std::string& ch, const std::string& sess) {
+                HandleRelayRequested(ch, sess);
+              });
+          post_read();
+        });
+      };
+      post_read();
+      ioc.run();
+    };
+
     bool connected = false;
     if (parsed->scheme == "wss") {
       asio::io_context ioc;
@@ -378,51 +478,8 @@ void HubControlChannel::RunControlLoop() {
                      options_.connect_timeout)) {
         connected = true;
         std::cout << "[hub-ctrl] control channel connected\n";
-
-        if (options_.list_sessions_fn) {
-          const std::string sessions_json = options_.list_sessions_fn();
-          json::object msg;
-          msg["type"] = "session.inventory";
-          msg["sessions"] = json::parse(sessions_json);
-          boost::system::error_code ec;
-          ws.text(true);
-          ws.write(asio::buffer(json::serialize(msg)), ec);
-          if (ec) {
-            std::cerr << "[hub-ctrl] failed to send session inventory: " << ec.message() << '\n';
-          }
-        }
-
-        // Read loop: block on each frame until disconnect or stop.
-        beast::flat_buffer buf;
-        boost::system::error_code ec;
-        while (true) {
-          {
-            std::unique_lock lock(mutex_);
-            if (stop_) {
-              boost::system::error_code ignore;
-              ws.close(websocket::close_code::going_away, ignore);
-              return;
-            }
-          }
-          buf.clear();
-          ws.read(buf, ec);
-          if (ec) {
-            std::cerr << "[hub-ctrl] control channel read error: " << ec.message() << '\n';
-            break;
-          }
-          const std::string msg(static_cast<const char*>(buf.data().data()), buf.size());
-          try {
-            const auto obj = json::parse(msg).as_object();
-            const std::string type(obj.at("type").as_string());
-            if (type == "relay.requested") {
-              const std::string channel_id(obj.at("channel_id").as_string());
-              const std::string session_id(obj.at("session_id").as_string());
-              HandleRelayRequested(channel_id, session_id);
-            }
-          } catch (const std::exception& e) {
-            std::cerr << "[hub-ctrl] malformed control message: " << e.what() << '\n';
-          }
-        }
+        maybe_send_inventory(ws);
+        run_read_loop(ws, ioc);
       }
       {
         std::unique_lock lock(mutex_);
@@ -442,50 +499,8 @@ void HubControlChannel::RunControlLoop() {
                     options_.connect_timeout)) {
         connected = true;
         std::cout << "[hub-ctrl] control channel connected (plain WS)\n";
-
-        if (options_.list_sessions_fn) {
-          const std::string sessions_json = options_.list_sessions_fn();
-          json::object msg;
-          msg["type"] = "session.inventory";
-          msg["sessions"] = json::parse(sessions_json);
-          boost::system::error_code ec;
-          ws.text(true);
-          ws.write(asio::buffer(json::serialize(msg)), ec);
-          if (ec) {
-            std::cerr << "[hub-ctrl] failed to send session inventory: " << ec.message() << '\n';
-          }
-        }
-
-        beast::flat_buffer buf;
-        boost::system::error_code ec;
-        while (true) {
-          {
-            std::unique_lock lock(mutex_);
-            if (stop_) {
-              boost::system::error_code ignore;
-              ws.close(websocket::close_code::going_away, ignore);
-              return;
-            }
-          }
-          buf.clear();
-          ws.read(buf, ec);
-          if (ec) {
-            std::cerr << "[hub-ctrl] control channel read error: " << ec.message() << '\n';
-            break;
-          }
-          const std::string msg(static_cast<const char*>(buf.data().data()), buf.size());
-          try {
-            const auto obj = json::parse(msg).as_object();
-            const std::string type(obj.at("type").as_string());
-            if (type == "relay.requested") {
-              const std::string channel_id(obj.at("channel_id").as_string());
-              const std::string session_id(obj.at("session_id").as_string());
-              HandleRelayRequested(channel_id, session_id);
-            }
-          } catch (const std::exception& e) {
-            std::cerr << "[hub-ctrl] malformed control message: " << e.what() << '\n';
-          }
-        }
+        maybe_send_inventory(ws);
+        run_read_loop(ws, ioc);
       }
       {
         std::unique_lock lock(mutex_);
@@ -529,76 +544,97 @@ void HubControlChannel::RunRelayBridge(std::string channel_id, std::string sessi
     return;
   }
 
-  const std::string local_scheme = local_tls_ ? "ws" : "ws";  // always plain loopback
-  const std::string local_path = "/ws/sessions/" + session_id +
-                                  "?access_token=" + relay_token;
+  const std::string local_path =
+      "/ws/sessions/" + session_id + "?access_token=" + relay_token;
   const std::string hub_relay_path = "/api/v1/relay/host/" + channel_id;
 
+  const ParsedUrl local_url{
+      .scheme = local_tls_ ? "wss" : "ws",
+      .host = "127.0.0.1",
+      .port = std::to_string(local_port_),
+      .path = local_path,
+  };
+
+  auto stop_pred = [this]() -> bool {
+    std::lock_guard lock(mutex_);
+    return stop_;
+  };
+
+  auto register_bridge_ioc = [&](const std::shared_ptr<asio::io_context>& ioc) {
+    std::lock_guard lock(bridges_mutex_);
+    bridge_iocs_.push_back(ioc);
+  };
+  auto unregister_bridge_ioc = [&](const std::shared_ptr<asio::io_context>& ioc) {
+    std::lock_guard lock(bridges_mutex_);
+    bridge_iocs_.erase(std::remove(bridge_iocs_.begin(), bridge_iocs_.end(), ioc),
+                       bridge_iocs_.end());
+  };
+
+  // Connect local side and pipe, given an already-connected hub_ws.
+  // Both hub_ws and local_ws share ioc so PipeWebSocketsAsync can run them together.
+  auto pipe_with_local = [&](auto& hub_ws, const std::shared_ptr<asio::io_context>& ioc) {
+    bool piped = false;
+    if (local_tls_) {
+      asio::ssl::context local_ssl{asio::ssl::context::tls_client};
+      local_ssl.set_verify_mode(asio::ssl::verify_none);  // loopback — skip cert check
+      websocket::stream<beast::ssl_stream<beast::tcp_stream>> local_ws(*ioc, local_ssl);
+      if (ConnectWss(local_ws, local_url, relay_token, local_path,
+                     options_.connect_timeout)) {
+        std::cout << "[hub-ctrl] relay bridge active: channel=" << channel_id
+                  << " session=" << session_id << '\n';
+        PipeWebSocketsAsync(*ioc, hub_ws, local_ws, stop_pred);
+        piped = true;
+      } else {
+        std::cerr << "[hub-ctrl] relay bridge: failed to connect local (TLS) side for session "
+                  << session_id << '\n';
+      }
+    } else {
+      websocket::stream<beast::tcp_stream> local_ws(*ioc);
+      if (ConnectWs(local_ws, local_url, relay_token, local_path,
+                    options_.connect_timeout)) {
+        std::cout << "[hub-ctrl] relay bridge active: channel=" << channel_id
+                  << " session=" << session_id << '\n';
+        PipeWebSocketsAsync(*ioc, hub_ws, local_ws, stop_pred);
+        piped = true;
+      } else {
+        std::cerr << "[hub-ctrl] relay bridge: failed to connect local side for session "
+                  << session_id << '\n';
+      }
+    }
+    if (!piped) {
+      boost::system::error_code ignore;
+      hub_ws.close(websocket::close_code::going_away, ignore);
+    }
+  };
+
   if (hub_parsed->scheme == "wss") {
-    asio::io_context ioc;
+    auto ioc = std::make_shared<asio::io_context>();
+    register_bridge_ioc(ioc);
     auto ssl_ctx = MakeHubSslContext(options_);
     ssl_ctx.set_verify_callback(asio::ssl::host_name_verification(hub_parsed->host));
-
-    websocket::stream<beast::ssl_stream<beast::tcp_stream>> hub_ws(ioc, ssl_ctx);
+    websocket::stream<beast::ssl_stream<beast::tcp_stream>> hub_ws(*ioc, ssl_ctx);
     if (!ConnectWss(hub_ws, *hub_parsed, hub_token_, hub_relay_path,
                     options_.connect_timeout)) {
+      unregister_bridge_ioc(ioc);
       std::cerr << "[hub-ctrl] relay bridge: failed to connect Hub side for channel "
                 << channel_id << '\n';
       return;
     }
-
-    // Local side is always plain WS over loopback.
-    const ParsedUrl local_url{
-        .scheme = "ws",
-        .host = "127.0.0.1",
-        .port = std::to_string(local_port_),
-        .path = local_path,
-    };
-    asio::io_context local_ioc;
-    websocket::stream<beast::tcp_stream> local_ws(local_ioc);
-    if (!ConnectWs(local_ws, local_url, relay_token, local_path,
-                   options_.connect_timeout)) {
-      std::cerr << "[hub-ctrl] relay bridge: failed to connect local side for session "
-                << session_id << '\n';
-      boost::system::error_code ignore;
-      hub_ws.close(websocket::close_code::going_away, ignore);
-      return;
-    }
-
-    std::cout << "[hub-ctrl] relay bridge active: channel=" << channel_id
-              << " session=" << session_id << '\n';
-    PipeWebSockets(hub_ws, local_ws);
+    pipe_with_local(hub_ws, ioc);
+    unregister_bridge_ioc(ioc);
   } else {
-    // Plain WS Hub (dev/test environment).
-    asio::io_context ioc;
-    websocket::stream<beast::tcp_stream> hub_ws(ioc);
+    auto ioc = std::make_shared<asio::io_context>();
+    register_bridge_ioc(ioc);
+    websocket::stream<beast::tcp_stream> hub_ws(*ioc);
     if (!ConnectWs(hub_ws, *hub_parsed, hub_token_, hub_relay_path,
                    options_.connect_timeout)) {
+      unregister_bridge_ioc(ioc);
       std::cerr << "[hub-ctrl] relay bridge: failed to connect Hub side (plain) for channel "
                 << channel_id << '\n';
       return;
     }
-
-    const ParsedUrl local_url{
-        .scheme = "ws",
-        .host = "127.0.0.1",
-        .port = std::to_string(local_port_),
-        .path = local_path,
-    };
-    asio::io_context local_ioc;
-    websocket::stream<beast::tcp_stream> local_ws(local_ioc);
-    if (!ConnectWs(local_ws, local_url, relay_token, local_path,
-                   options_.connect_timeout)) {
-      std::cerr << "[hub-ctrl] relay bridge: failed to connect local side for session "
-                << session_id << '\n';
-      boost::system::error_code ignore;
-      hub_ws.close(websocket::close_code::going_away, ignore);
-      return;
-    }
-
-    std::cout << "[hub-ctrl] relay bridge active (plain): channel=" << channel_id
-              << " session=" << session_id << '\n';
-    PipeWebSockets(hub_ws, local_ws);
+    pipe_with_local(hub_ws, ioc);
+    unregister_bridge_ioc(ioc);
   }
 
   std::cout << "[hub-ctrl] relay bridge closed: channel=" << channel_id << '\n';
