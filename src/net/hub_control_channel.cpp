@@ -337,10 +337,11 @@ HubControlChannel::~HubControlChannel() {
 }
 
 void HubControlChannel::Start() {
-  {
-    std::lock_guard lock(mutex_);
-    stop_ = false;
+  std::lock_guard lock(mutex_);
+  if (control_thread_.joinable()) {
+    return;
   }
+  stop_ = false;
   control_thread_ = std::thread(&HubControlChannel::RunControlLoop, this);
 }
 
@@ -523,6 +524,12 @@ void HubControlChannel::HandleRelayRequested(const std::string& channel_id,
                                              const std::string& session_id) {
   if (channel_id.empty() || session_id.empty()) {
     return;
+  }
+  {
+    std::lock_guard lock(mutex_);
+    if (stop_) {
+      return;
+    }
   }
 
   const std::string relay_token = issue_relay_token_(session_id);

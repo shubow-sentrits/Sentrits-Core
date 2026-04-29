@@ -173,6 +173,57 @@ TEST(HubControlChannelTest, StartAndStopAreIdempotent) {
   ::close(server_fd);
 }
 
+TEST(HubControlChannelTest, StartTwiceDoesNotSpawnDuplicateControlThreads) {
+  if (!CanBindLoopbackTcp()) {
+    GTEST_SKIP() << "loopback TCP bind is not available in this environment";
+  }
+
+  int server_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  ASSERT_GE(server_fd, 0);
+  int opt = 1;
+  ::setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(19997);
+  ::bind(server_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+  ::listen(server_fd, 10);
+
+  std::atomic<bool> server_done{false};
+  std::atomic<int> accepted_connections{0};
+  std::thread server_thread([server_fd, &server_done, &accepted_connections]() {
+    while (!server_done.load(std::memory_order_relaxed)) {
+      int client = ::accept4(server_fd, nullptr, nullptr, SOCK_NONBLOCK);
+      if (client >= 0) {
+        accepted_connections.fetch_add(1, std::memory_order_relaxed);
+        linger sl{1, 0};
+        ::setsockopt(client, SOL_SOCKET, SO_LINGER, &sl, sizeof(sl));
+        ::close(client);
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+    }
+  });
+
+  HubControlChannel ch("http://127.0.0.1:19997", "tok", 19998, false,
+                       [](const std::string&) { return std::string{}; },
+                       HubControlChannelOptions{.reconnect_delay = std::chrono::seconds(30),
+                                                .connect_timeout = std::chrono::seconds(1),
+                                                .use_default_verify_paths = false,
+                                                .ca_certificate_file = std::nullopt,
+                                                .list_sessions_fn = {}});
+  ch.Start();
+  ch.Start();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  ch.Stop();
+
+  server_done.store(true);
+  server_thread.join();
+  ::close(server_fd);
+
+  EXPECT_LE(accepted_connections.load(std::memory_order_relaxed), 1);
+}
+
 // ---------------------------------------------------------------------------
 // Relay bridge end-to-end: control channel → relay.requested → bridge → pipe
 // ---------------------------------------------------------------------------
