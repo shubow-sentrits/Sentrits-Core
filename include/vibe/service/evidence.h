@@ -123,7 +123,7 @@ struct EvidenceResult {
 };
 
 struct ObservationEvent {
-  std::string id;
+  std::string id{};
   std::int64_t timestamp_unix_ms = 0;
   std::string actor_session_id;
   std::string actor_title;
