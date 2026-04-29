@@ -14,8 +14,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -82,6 +84,112 @@ constexpr std::string_view kTestPrivateKeyPem =
     "gcj5VeYbcX2ThNIDBdG4X3NIDVtcCZ0WogLN3mPLwzeqsNZPrOoVpt+yOTh3vxXw\n"
     "UZeHqLTTIsdkEycZb2Usmw==\n"
     "-----END PRIVATE KEY-----\n";
+
+class FakeHubServer {
+ public:
+  FakeHubServer() = default;
+  ~FakeHubServer() { Stop(); }
+
+  void Start() {
+    started_.store(false);
+    stop_requested_.store(false);
+    thread_ = std::thread([this]() { Run(); });
+    while (!started_.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+
+  void Stop() {
+    stop_requested_.store(true);
+    boost::system::error_code error_code;
+    if (acceptor_.has_value()) {
+      acceptor_->close(error_code);
+    }
+    if (thread_.joinable()) {
+      thread_.join();
+    }
+  }
+
+  [[nodiscard]] auto port() const -> std::uint16_t { return port_; }
+
+  auto WaitForHeartbeat(std::chrono::milliseconds timeout) -> std::optional<std::string> {
+    std::unique_lock lock(mutex_);
+    if (!cv_.wait_for(lock, timeout, [this] { return request_body_.has_value(); })) {
+      return std::nullopt;
+    }
+    return request_body_;
+  }
+
+ private:
+  void Run() {
+    try {
+      asio::io_context io_context;
+      tcp::acceptor acceptor(io_context, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+      acceptor.non_blocking(true);
+      port_ = acceptor.local_endpoint().port();
+      acceptor_.emplace(std::move(acceptor));
+      started_.store(true);
+
+      tcp::socket socket(io_context);
+      while (!stop_requested_.load()) {
+        boost::system::error_code accept_error;
+        acceptor_->accept(socket, accept_error);
+        if (!accept_error) {
+          break;
+        }
+        if (accept_error != asio::error::would_block &&
+            accept_error != asio::error::try_again &&
+            accept_error != asio::error::operation_aborted) {
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (stop_requested_.load()) {
+        return;
+      }
+
+      beast::flat_buffer buffer;
+      http::request<http::string_body> request;
+      http::read(socket, buffer, request);
+
+      {
+        std::lock_guard lock(mutex_);
+        request_body_ = request.body();
+      }
+      cv_.notify_all();
+
+      http::response<http::string_body> response{http::status::ok, 11};
+      response.set(http::field::content_type, "application/json");
+      response.body() = R"({"ok":true})";
+      response.prepare_payload();
+      http::write(socket, response);
+
+      boost::system::error_code error_code;
+      socket.shutdown(tcp::socket::shutdown_both, error_code);
+    } catch (const std::exception&) {
+      started_.store(true);
+    }
+  }
+
+  std::atomic<bool> started_{false};
+  std::atomic<bool> stop_requested_{false};
+  std::thread thread_;
+  std::optional<tcp::acceptor> acceptor_;
+  std::uint16_t port_{0};
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::optional<std::string> request_body_;
+};
+
+auto CanBindLoopbackTcp() -> bool {
+  try {
+    asio::io_context io_context;
+    tcp::acceptor acceptor(io_context, tcp::endpoint(asio::ip::address_v4::loopback(), 0));
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
 
 class HttpServerFixture : public ::testing::Test {
  protected:
@@ -943,6 +1051,51 @@ TEST_F(HttpServerFixture, RemoteListenerSupportsHttpsAndWssWhenTlsConfigured) {
   const std::string payload = beast::buffers_to_string(buffer.data());
   EXPECT_NE(payload.find("\"type\":\"session.updated\""), std::string::npos);
   EXPECT_NE(payload.find("\"sessionId\":\"s_1\""), std::string::npos);
+}
+
+TEST_F(HttpServerFixture, HubHeartbeatPostsInitialSessionInventoryAfterStartup) {
+  if (!CanBindLoopbackTcp()) {
+    GTEST_SKIP() << "loopback TCP bind is not available in this environment";
+  }
+
+  StopServer();
+
+  FakeHubServer hub;
+  hub.Start();
+
+  started_.store(false);
+  run_finished_.store(false);
+  run_result_.store(false);
+  server_thread_ = std::thread([this, &hub]() {
+    HttpServer server("127.0.0.1", kAdminPort, "127.0.0.1", kRemotePort, storage_root_);
+    server.EnableHubIntegration("http://127.0.0.1:" + std::to_string(hub.port()), "hub-token");
+    server_ = &server;
+    started_.store(true);
+    const bool ran = server.Run();
+    run_result_.store(ran);
+    run_finished_.store(true);
+    server_ = nullptr;
+  });
+
+  while (!started_.load()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  const auto request_body = hub.WaitForHeartbeat(std::chrono::seconds(2));
+  ASSERT_TRUE(request_body.has_value());
+
+  boost::system::error_code error_code;
+  const auto parsed = json::parse(*request_body, error_code);
+  ASSERT_FALSE(error_code);
+  ASSERT_TRUE(parsed.is_object());
+  const auto& object = parsed.as_object();
+  const auto* sessions = object.if_contains("sessions");
+  ASSERT_NE(sessions, nullptr);
+  ASSERT_TRUE(sessions->is_array());
+  EXPECT_TRUE(sessions->as_array().empty());
+
+  StopServer();
+  hub.Stop();
 }
 
 TEST_F(HttpServerFixture, PairingAndHostConfigPersistAcrossServerRestart) {

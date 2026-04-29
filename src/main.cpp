@@ -751,10 +751,13 @@ void PrintUsage() {
             << "  sentrits records show [--host HOST] [--port PORT] [--json] <record-id>\n"
             << "  sentrits session attach [--host HOST] [--port PORT] <session-id>\n"
             << "  sentrits session observe [--host HOST] [--port PORT] <session-id>\n"
+            << "  sentrits relay observe --hub-url URL --token TOKEN --host-id HOST_ID --session-id SESSION_ID\n"
             << "  sentrits session stop [--host HOST] [--port PORT] [--json] <session-id>\n"
             << "  sentrits session clear [--host HOST] [--port PORT] [--json]\n"
             << "  sentrits host status [--host HOST] [--port PORT] [--json]\n"
             << "  sentrits host set-name [--host HOST] [--port PORT] <display-name>\n"
+            << "  sentrits host set-hub <hub-url> <hub-token>\n"
+            << "  sentrits host clear-hub\n"
             << "  sentrits host set-provider-command [--host HOST] [--port PORT]"
                " --provider codex|claude -- <command> [args...]\n"
             << "  sentrits host clear-provider-command [--host HOST] [--port PORT]"
@@ -1004,6 +1007,48 @@ void ConsumeImplicitProviderPositional(ParsedCommandOptions& options) {
   options.positionals.erase(options.positionals.begin());
 }
 
+struct RelayObserveOptions {
+  std::string hub_url;
+  std::string token;
+  std::string host_id;
+  std::string session_id;
+};
+
+auto ParseRelayObserveOptions(const int argc, char** argv, int start_index)
+    -> std::optional<RelayObserveOptions> {
+  RelayObserveOptions options;
+  int index = start_index;
+  while (index < argc) {
+    const std::string argument = argv[index];
+    if (argument == "--hub-url" && index + 1 < argc) {
+      options.hub_url = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--token" && index + 1 < argc) {
+      options.token = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--host-id" && index + 1 < argc) {
+      options.host_id = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    if (argument == "--session-id" && index + 1 < argc) {
+      options.session_id = argv[index + 1];
+      index += 2;
+      continue;
+    }
+    return std::nullopt;
+  }
+  if (options.hub_url.empty() || options.token.empty() ||
+      options.host_id.empty() || options.session_id.empty()) {
+    return std::nullopt;
+  }
+  return options;
+}
+
 auto ParseCommandOptions(const int argc, char** argv, int start_index,
                          vibe::cli::DaemonEndpoint default_endpoint) -> std::optional<ParsedCommandOptions> {
   ParsedCommandOptions options;
@@ -1172,7 +1217,9 @@ auto main(const int argc, char** argv) -> int {
       return 1;
     }
 
-    if (!admin_host_explicit || !admin_port_explicit || !remote_host_explicit || !remote_port_explicit) {
+    std::string hub_url;
+    std::string hub_token;
+    {
       const vibe::store::FileHostConfigStore host_config_store{storage_root};
       if (const auto host_identity = host_config_store.LoadHostIdentity(); host_identity.has_value()) {
         if (!admin_host_explicit) {
@@ -1187,11 +1234,19 @@ auto main(const int argc, char** argv) -> int {
         if (!remote_port_explicit) {
           remote_port = host_identity->remote_port;
         }
+        if (host_identity->hub_url.has_value()) {
+          hub_url = *host_identity->hub_url;
+        }
+        if (host_identity->hub_token.has_value()) {
+          hub_token = *host_identity->hub_token;
+        }
       }
     }
 
     vibe::net::HttpServer server(admin_host, admin_port, remote_host, remote_port,
                                  remote_tls_override, enable_discovery);
+    server.EnableHubIntegration(hub_url, hub_token);
+    server.EnableHubControlChannel(hub_url, hub_token);
     sigset_t signal_set;
     sigemptyset(&signal_set);
     sigaddset(&signal_set, SIGHUP);
@@ -1316,6 +1371,19 @@ auto main(const int argc, char** argv) -> int {
     }
     std::cerr << "session id required\n";
     return 1;
+  }
+
+  if (command == "relay" && argc >= 3) {
+    const std::string subcommand = argv[2];
+    if (subcommand == "observe") {
+      const auto options = ParseRelayObserveOptions(argc, argv, 3);
+      if (!options.has_value()) {
+        PrintUsage();
+        return 1;
+      }
+      return vibe::cli::ObserveHubRelaySession(
+          options->hub_url, options->token, options->host_id, options->session_id);
+    }
   }
 
   if (command == "session" && argc >= 3) {
@@ -1549,6 +1617,44 @@ auto main(const int argc, char** argv) -> int {
 
   if (command == "host" && argc >= 3) {
     const std::string subcommand = argv[2];
+    if (subcommand == "set-hub") {
+      if (argc != 5) {
+        PrintUsage();
+        return 1;
+      }
+      vibe::store::FileHostConfigStore host_config_store{vibe::net::DefaultStorageRoot()};
+      auto host_identity = vibe::store::EnsureHostIdentity(host_config_store);
+      if (!host_identity.has_value()) {
+        std::cerr << "failed to initialize host identity\n";
+        return 1;
+      }
+      host_identity->hub_url = std::string(argv[3]);
+      host_identity->hub_token = std::string(argv[4]);
+      if (!host_config_store.SaveHostIdentity(*host_identity)) {
+        std::cerr << "failed to save hub configuration\n";
+        return 1;
+      }
+      std::cout << "hub configuration saved; restart sentrits serve to apply it\n";
+      return 0;
+    }
+
+    if (subcommand == "clear-hub") {
+      vibe::store::FileHostConfigStore host_config_store{vibe::net::DefaultStorageRoot()};
+      auto host_identity = vibe::store::EnsureHostIdentity(host_config_store);
+      if (!host_identity.has_value()) {
+        std::cerr << "failed to initialize host identity\n";
+        return 1;
+      }
+      host_identity->hub_url = std::nullopt;
+      host_identity->hub_token = std::nullopt;
+      if (!host_config_store.SaveHostIdentity(*host_identity)) {
+        std::cerr << "failed to clear hub configuration\n";
+        return 1;
+      }
+      std::cout << "hub configuration cleared\n";
+      return 0;
+    }
+
     if (subcommand == "status") {
       const auto options = ParseCommandOptions(argc, argv, 3, LoadConfiguredAdminEndpoint());
       if (!options.has_value()) {

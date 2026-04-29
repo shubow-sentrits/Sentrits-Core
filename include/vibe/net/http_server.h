@@ -9,6 +9,9 @@
 #include <mutex>
 #include <string>
 
+#include "vibe/net/hub_client.h"
+#include "vibe/net/hub_control_channel.h"
+
 #include <boost/asio/io_context.hpp>
 
 #include "vibe/auth/authorizer.h"
@@ -41,6 +44,18 @@ class HttpServer {
   [[nodiscard]] auto Run() -> bool;
   void Stop();
 
+  // Enables Sentrits-Hub heartbeat integration. Must be called before Run().
+  // No-op if hub_url or hub_token is empty.
+  void EnableHubIntegration(std::string hub_url, std::string hub_token);
+
+  // Enables the Hub control channel (relay). Must be called before Run().
+  // No-op if hub_url or hub_token is empty.
+  void EnableHubControlChannel(std::string hub_url, std::string hub_token);
+
+  // Issues a single-use relay token bound to session_id. Called by
+  // HubControlChannel before bridging the relay WS to the local session WS.
+  [[nodiscard]] auto IssueRelayToken(const std::string& session_id) -> std::string;
+
  private:
   std::string admin_bind_address_;
   std::uint16_t admin_port_;
@@ -59,6 +74,9 @@ class HttpServer {
   std::function<void()> stop_callback_;
   mutable std::mutex state_mutex_;
   bool stopping_{false};
+  std::unique_ptr<HubClient> hub_client_;
+  std::unique_ptr<HubControlChannel> hub_control_channel_;
+  RelayTokenStore relay_token_store_;
 };
 
 }  // namespace vibe::net

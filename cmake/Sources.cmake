@@ -5,6 +5,8 @@ set(VIBE_CORE_SOURCES
   src/cli/daemon_client_http.cpp
   src/net/discovery.cpp
   src/net/discovery_broadcaster.cpp
+  src/net/hub_client.cpp
+  src/net/hub_control_channel.cpp
   src/net/json.cpp
   src/net/request_parsing.cpp
   src/net/local_auth.cpp
@@ -40,6 +42,8 @@ set(SENTRITS_TEST_SOURCES
   tests/cli/service_bootstrap_test.cpp
   tests/cli/session_attach_integration_test.cpp
   tests/net/discovery_broadcaster_test.cpp
+  tests/net/hub_client_test.cpp
+  tests/net/hub_control_channel_test.cpp
   tests/net/http_json_test.cpp
   tests/net/http_server_integration_test.cpp
   tests/net/request_parsing_test.cpp

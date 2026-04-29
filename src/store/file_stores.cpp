@@ -603,6 +603,26 @@ auto HostIdentityFromJsonWithDefaults(const json::value& value) -> std::optional
     }
   }
 
+  if (const auto* hub_url = object.if_contains("hubUrl"); hub_url != nullptr) {
+    if (!hub_url->is_string()) {
+      return std::nullopt;
+    }
+    const std::string val = std::string(hub_url->as_string());
+    if (!val.empty()) {
+      identity.hub_url = val;
+    }
+  }
+
+  if (const auto* hub_token = object.if_contains("hubToken"); hub_token != nullptr) {
+    if (!hub_token->is_string()) {
+      return std::nullopt;
+    }
+    const std::string val = std::string(hub_token->as_string());
+    if (!val.empty()) {
+      identity.hub_token = val;
+    }
+  }
+
   return identity;
 }
 
@@ -646,6 +666,12 @@ auto ToJsonValue(const HostIdentity& identity) -> json::value {
       allowlist.emplace_back(key);
     }
     object["serviceManagerEnvironmentAllowlist"] = std::move(allowlist);
+  }
+  if (identity.hub_url.has_value()) {
+    object["hubUrl"] = *identity.hub_url;
+  }
+  if (identity.hub_token.has_value()) {
+    object["hubToken"] = *identity.hub_token;
   }
   return object;
 }
