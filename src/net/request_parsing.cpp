@@ -100,6 +100,12 @@ auto ParseOptionalNonEmptyString(const json::value* value)
   return std::optional<std::string>{parsed};
 }
 
+void StripTrailingCrLf(std::string& text) {
+  while (!text.empty() && (text.back() == '\r' || text.back() == '\n')) {
+    text.pop_back();
+  }
+}
+
 }  // namespace
 
 auto ParseCreateSessionRequest(const std::string& body)
@@ -253,6 +259,77 @@ auto ParseInputRequest(const std::string& body) -> std::optional<std::string> {
   }
 
   return json::value_to<std::string>(*data);
+}
+
+auto ParseMessageRequest(const std::string& body) -> std::optional<MessageRequestPayload> {
+  boost::system::error_code error_code;
+  const json::value parsed = json::parse(body, error_code);
+  if (error_code || !parsed.is_object()) {
+    return std::nullopt;
+  }
+
+  const json::object& object = parsed.as_object();
+  const auto kind = object.if_contains("kind");
+  const auto payload_kind = object.if_contains("payloadKind");
+  if ((kind == nullptr && payload_kind == nullptr) ||
+      (kind != nullptr && !kind->is_string()) ||
+      (payload_kind != nullptr && !payload_kind->is_string())) {
+    return std::nullopt;
+  }
+
+  std::string parsed_kind =
+      kind != nullptr ? json::value_to<std::string>(*kind) : json::value_to<std::string>(*payload_kind);
+  if (payload_kind != nullptr && kind != nullptr &&
+      parsed_kind != json::value_to<std::string>(*payload_kind)) {
+    return std::nullopt;
+  }
+  if (parsed_kind != "text") {
+    return std::nullopt;
+  }
+
+  const auto text = object.if_contains("text");
+  if (text == nullptr || !text->is_string()) {
+    return std::nullopt;
+  }
+
+  bool strip_trailing_newline = true;
+  if (const auto strip = object.if_contains("stripTrailingNewline"); strip != nullptr) {
+    if (!strip->is_bool()) {
+      return std::nullopt;
+    }
+    strip_trailing_newline = strip->as_bool();
+  }
+
+  bool submit = true;
+  if (const auto submit_value = object.if_contains("submit"); submit_value != nullptr) {
+    if (!submit_value->is_bool()) {
+      return std::nullopt;
+    }
+    submit = submit_value->as_bool();
+  }
+
+  const auto source_session_id = ParseOptionalNonEmptyString(object.if_contains("sourceSessionId"));
+  const auto evidence_id = ParseOptionalNonEmptyString(object.if_contains("evidenceId"));
+  if (!source_session_id.has_value() || !evidence_id.has_value()) {
+    return std::nullopt;
+  }
+
+  std::string parsed_text = json::value_to<std::string>(*text);
+  if (strip_trailing_newline) {
+    StripTrailingCrLf(parsed_text);
+  }
+  if (parsed_text.empty()) {
+    return std::nullopt;
+  }
+
+  return MessageRequestPayload{
+      .kind = std::move(parsed_kind),
+      .text = std::move(parsed_text),
+      .source_session_id = std::move(*source_session_id),
+      .evidence_id = std::move(*evidence_id),
+      .strip_trailing_newline = strip_trailing_newline,
+      .submit = submit,
+  };
 }
 
 auto ParsePairingRequest(const std::string& body) -> std::optional<PairingRequestPayload> {

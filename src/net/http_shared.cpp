@@ -1222,6 +1222,31 @@ auto HandleCreateLogSessionRequest(const HttpRequest& request,
   return MakeJsonResponse(request, http::status::created, ToJson(*created));
 }
 
+auto HandleMessageRequest(const HttpRequest& request, vibe::service::SessionManager& session_manager,
+                          const std::string& session_id) -> HttpResponse {
+  const auto payload = ParseMessageRequest(request.body());
+  if (!payload.has_value()) {
+    return MakeJsonResponse(request, http::status::bad_request, "{\"error\":\"invalid message request\"}");
+  }
+
+  std::string input = payload->text;
+  if (payload->submit) {
+    input.push_back('\n');
+  }
+
+  if (!session_manager.SendInput(session_id, input)) {
+    return MakeJsonResponse(request, http::status::bad_request, "{\"error\":\"unable to send message\"}");
+  }
+
+  json::object response;
+  response["status"] = "ok";
+  response["targetSessionId"] = session_id;
+  response["kind"] = payload->kind;
+  response["payloadKind"] = payload->kind;
+  response["payloadSizeBytes"] = input.size();
+  return MakeJsonResponse(request, http::status::ok, json::serialize(response));
+}
+
 auto ActorContextFromHeader(const HttpRequest& request,
                             vibe::service::SessionManager& session_manager)
     -> std::optional<vibe::service::EvidenceActorContext> {
@@ -1809,6 +1834,7 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
     const auto file_suffix = std::string("/file");
     const auto groups_suffix = std::string("/groups");
     const auto input_suffix = std::string("/input");
+    const auto messages_suffix = std::string("/messages");
     const auto stop_suffix = std::string("/stop");
     const auto tail_marker = std::string("/tail");
     const auto evidence_marker = std::string("/evidence/");
@@ -1932,6 +1958,18 @@ auto HandleRequest(const HttpRequest& request, vibe::service::SessionManager& se
       }
 
       return MakeJsonResponse(request, http::status::ok, "{\"status\":\"ok\"}");
+    }
+
+    if (request.method() == http::verb::post && remainder.size() > messages_suffix.size() &&
+        remainder.ends_with(messages_suffix)) {
+      if (const auto auth_response =
+              RequireAuthorization(request, context, vibe::auth::AuthorizationAction::ControlSession);
+          auth_response.has_value()) {
+        return *auth_response;
+      }
+
+      const std::string session_id = remainder.substr(0, remainder.size() - messages_suffix.size());
+      return HandleMessageRequest(request, session_manager, session_id);
     }
 
     if (request.method() == http::verb::post && remainder.size() > groups_suffix.size() &&

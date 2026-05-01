@@ -48,6 +48,7 @@ class FakeAuthorizer final : public vibe::auth::Authorizer {
   [[nodiscard]] auto Authorize(const vibe::auth::RequestContext& request_context,
                                const vibe::auth::AuthorizationAction action) const
       -> vibe::auth::AuthResult override {
+    actions.push_back(action);
     if (request_context.is_local_request &&
         (action == vibe::auth::AuthorizationAction::ApprovePairing ||
          action == vibe::auth::AuthorizationAction::ConfigureHost)) {
@@ -61,6 +62,8 @@ class FakeAuthorizer final : public vibe::auth::Authorizer {
 
     return AuthenticateBearerToken(request_context.bearer_token);
   }
+
+  mutable std::vector<vibe::auth::AuthorizationAction> actions;
 };
 
 class FakePairingService final : public vibe::auth::PairingService {
@@ -311,6 +314,20 @@ void ConfigureInteractiveShellPathFixture(const std::filesystem::path& home_dir,
   WriteExecutable(bin_dir / command_name,
                   "#!/bin/sh\n"
                   "printf 'fixture:path-command %s\\n' \"" + command_name + "\"\n");
+}
+
+auto WaitForFileContains(const std::filesystem::path& path, const std::string& expected) -> bool {
+  for (int attempt = 0; attempt < 20; ++attempt) {
+    std::ifstream input(path, std::ios::binary);
+    if (input.is_open()) {
+      const std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+      if (content.find(expected) != std::string::npos) {
+        return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  }
+  return false;
 }
 
 TEST(HttpSharedTest, ReturnsHealthResponse) {
@@ -1142,6 +1159,91 @@ TEST(HttpSharedTest, RejectsInvalidInputRequest) {
 
   const HttpResponse input_response = HandleRequest(input_request, session_manager);
   EXPECT_EQ(input_response.result(), http::status::bad_request);
+}
+
+TEST(HttpSharedTest, SendsMessageToExistingSession) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  const auto temp_dir = MakeTempDir("sentrits-http-shared-message-send");
+  const auto output_path = temp_dir / "message.txt";
+  const std::string command =
+      "while IFS= read -r line; do printf \"%s\" \"$line\" > " + output_path.string() + "; done";
+
+  HttpRequest create_request;
+  create_request.method(http::verb::post);
+  create_request.target("/sessions");
+  create_request.version(11);
+  create_request.set(http::field::authorization, "Bearer good-token");
+  create_request.body() = "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"message-target\","
+                          "\"envMode\":\"clean\","
+                          "\"commandShell\":\"" +
+                          JsonEscape(command) + "\"}";
+  create_request.prepare_payload();
+  const HttpResponse create_response =
+      HandleRequest(create_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store));
+  ASSERT_EQ(create_response.result(), http::status::created);
+
+  HttpRequest message_request;
+  message_request.method(http::verb::post);
+  message_request.target("/sessions/s_1/messages");
+  message_request.version(11);
+  message_request.set(http::field::authorization, "Bearer good-token");
+  message_request.body() = R"({"kind":"text","text":"hello from message"})";
+  message_request.prepare_payload();
+
+  const HttpResponse message_response =
+      HandleRequest(message_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store));
+  EXPECT_EQ(message_response.result(), http::status::ok);
+  EXPECT_NE(message_response.body().find("\"targetSessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(message_response.body().find("\"kind\":\"text\""), std::string::npos);
+  EXPECT_NE(message_response.body().find("\"payloadSizeBytes\":19"), std::string::npos);
+  EXPECT_TRUE(WaitForFileContains(output_path, "hello from message"));
+}
+
+TEST(HttpSharedTest, MessageRequestUsesControlSessionAuthorization) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+  const auto remote_context = MakeAuthContext(authorizer, pairing_service, host_config_store, nullptr,
+                                              nullptr, ListenerRole::RemoteClient);
+
+  HttpRequest request;
+  request.method(http::verb::post);
+  request.target("/sessions/s_1/messages");
+  request.version(11);
+  request.body() = R"({"kind":"text","text":"hello"})";
+  request.prepare_payload();
+
+  const HttpResponse response = HandleRequest(request, session_manager, remote_context);
+  EXPECT_EQ(response.result(), http::status::unauthorized);
+  ASSERT_FALSE(authorizer.actions.empty());
+  EXPECT_EQ(authorizer.actions.back(), vibe::auth::AuthorizationAction::ControlSession);
+}
+
+TEST(HttpSharedTest, RejectsInvalidMessageRequest) {
+  auto session_manager = MakeManager();
+  FakeAuthorizer authorizer;
+  FakePairingService pairing_service;
+  FakeHostConfigStore host_config_store;
+
+  HttpRequest request;
+  request.method(http::verb::post);
+  request.target("/sessions/s_1/messages");
+  request.version(11);
+  request.set(http::field::authorization, "Bearer good-token");
+  request.body() = R"({"kind":"control","text":"hello"})";
+  request.prepare_payload();
+
+  const HttpResponse response =
+      HandleRequest(request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store));
+  EXPECT_EQ(response.result(), http::status::bad_request);
+  EXPECT_NE(response.body().find("invalid message request"), std::string::npos);
 }
 
 TEST(HttpSharedTest, StopIsIdempotentForExitedSession) {

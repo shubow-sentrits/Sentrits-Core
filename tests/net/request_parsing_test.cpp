@@ -139,6 +139,53 @@ TEST(RequestParsingTest, RejectsInvalidSessionGroupTagsUpdateRequest) {
   EXPECT_FALSE(ParseSessionGroupTagsUpdateRequest(R"({"mode":"set","tags":"frontend"})").has_value());
 }
 
+TEST(RequestParsingTest, ParsesTextMessageRequest) {
+  const auto request = ParseMessageRequest(
+      R"({"kind":"text","text":"message body","sourceSessionId":"s_1","evidenceId":"ev_123"})");
+  ASSERT_TRUE(request.has_value());
+  EXPECT_EQ(request->kind, "text");
+  EXPECT_EQ(request->text, "message body");
+  EXPECT_EQ(request->source_session_id, std::optional<std::string>{"s_1"});
+  EXPECT_EQ(request->evidence_id, std::optional<std::string>{"ev_123"});
+  EXPECT_TRUE(request->strip_trailing_newline);
+  EXPECT_TRUE(request->submit);
+}
+
+TEST(RequestParsingTest, ParsesLegacyPayloadKindAliasForMessageRequest) {
+  const auto request = ParseMessageRequest(R"({"payloadKind":"text","text":"message body"})");
+  ASSERT_TRUE(request.has_value());
+  EXPECT_EQ(request->kind, "text");
+  EXPECT_EQ(request->text, "message body");
+}
+
+TEST(RequestParsingTest, StripsTrailingCrLfFromMessageRequestByDefault) {
+  const auto request = ParseMessageRequest(R"({"kind":"text","text":"message body\r\n\n"})");
+  ASSERT_TRUE(request.has_value());
+  EXPECT_EQ(request->text, "message body");
+}
+
+TEST(RequestParsingTest, PreservesTrailingNewlineWhenMessageRequestAsksForIt) {
+  const auto request =
+      ParseMessageRequest(R"({"kind":"text","text":"message body\n","stripTrailingNewline":false})");
+  ASSERT_TRUE(request.has_value());
+  EXPECT_EQ(request->text, "message body\n");
+}
+
+TEST(RequestParsingTest, ParsesSubmitFalseForMessageRequest) {
+  const auto request = ParseMessageRequest(R"({"kind":"text","text":"message body","submit":false})");
+  ASSERT_TRUE(request.has_value());
+  EXPECT_FALSE(request->submit);
+}
+
+TEST(RequestParsingTest, RejectsInvalidMessageRequest) {
+  EXPECT_FALSE(ParseMessageRequest(R"({"kind":"file_path","text":"README.md"})").has_value());
+  EXPECT_FALSE(ParseMessageRequest(R"({"kind":"text"})").has_value());
+  EXPECT_FALSE(ParseMessageRequest(R"({"kind":"text","text":12})").has_value());
+  EXPECT_FALSE(ParseMessageRequest(R"({"kind":"text","text":"\n"})").has_value());
+  EXPECT_FALSE(ParseMessageRequest(R"({"kind":"text","text":"message","submit":"yes"})").has_value());
+  EXPECT_FALSE(ParseMessageRequest(R"({"kind":"text","payloadKind":"control","text":"message"})").has_value());
+}
+
 TEST(RequestParsingTest, ParsesWebSocketInputCommand) {
   const auto command = ParseWebSocketCommand(R"({"type":"terminal.input","data":"hello\n"})");
   ASSERT_TRUE(command.has_value());

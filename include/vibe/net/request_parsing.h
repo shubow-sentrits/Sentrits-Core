@@ -77,6 +77,15 @@ struct SessionGroupTagsUpdatePayload {
   std::vector<std::string> tags;
 };
 
+struct MessageRequestPayload {
+  std::string kind;
+  std::string text;
+  std::optional<std::string> source_session_id;
+  std::optional<std::string> evidence_id;
+  bool strip_trailing_newline{true};
+  bool submit{true};
+};
+
 using WebSocketCommand =
     std::variant<WebSocketInputCommand, WebSocketResizeCommand, WebSocketStopCommand,
                  WebSocketRequestControlCommand, WebSocketReleaseControlCommand>;
@@ -84,6 +93,7 @@ using WebSocketCommand =
 [[nodiscard]] auto ParseCreateSessionRequest(const std::string& body)
     -> std::optional<CreateSessionRequestPayload>;
 [[nodiscard]] auto ParseInputRequest(const std::string& body) -> std::optional<std::string>;
+[[nodiscard]] auto ParseMessageRequest(const std::string& body) -> std::optional<MessageRequestPayload>;
 [[nodiscard]] auto ParsePairingRequest(const std::string& body) -> std::optional<PairingRequestPayload>;
 [[nodiscard]] auto ParsePairingApprovalRequest(const std::string& body)
     -> std::optional<PairingApprovalPayload>;
