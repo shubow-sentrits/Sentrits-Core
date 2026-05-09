@@ -26,7 +26,16 @@ require_executable() {
 
 json_field() {
   local field="$1"
-  python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$field"
+  python3 - "$field" <<'PY'
+import json
+import sys
+
+field = sys.argv[1]
+value = json.load(sys.stdin).get(field)
+if not isinstance(value, str) or value == "":
+    raise SystemExit(f"missing string field: {field}")
+print(value)
+PY
 }
 
 persist_tail_evidence() {
