@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -64,6 +66,23 @@ auto FindLastPersistedRecord(const FakeSessionStore& session_store, const std::s
     }
   }
   return std::nullopt;
+}
+
+auto IsGeneratedSessionId(const std::string& session_id) -> bool {
+  constexpr std::string_view prefix = "s_";
+  if (!session_id.starts_with(prefix)) {
+    return false;
+  }
+  const std::size_t separator = session_id.find('_', prefix.size());
+  if (separator == std::string::npos || separator == prefix.size() ||
+      separator + 1U == session_id.size()) {
+    return false;
+  }
+  const std::string timestamp = session_id.substr(prefix.size(), separator - prefix.size());
+  const std::string random = session_id.substr(separator + 1U);
+  return std::ranges::all_of(timestamp, [](const unsigned char ch) { return std::isdigit(ch) != 0; }) &&
+         random.size() == 16U &&
+         std::ranges::all_of(random, [](const unsigned char ch) { return std::isxdigit(ch) != 0; });
 }
 
 auto PollUntilStatus(SessionManager& manager, const std::string& session_id,
@@ -514,7 +533,7 @@ TEST(SessionManagerTest, SkipsInvalidPersistedSessionIds) {
   EXPECT_TRUE(manager.ListSessions().empty());
 }
 
-TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdsAcrossRecoveredGaps) {
+TEST(SessionManagerTest, CreateSessionGeneratesStableOpaqueIdsAcrossRecoveredSessions) {
   FakeSessionStore session_store;
   session_store.sessions.push_back(vibe::store::PersistedSessionRecord{
       .session_id = "s_2",
@@ -553,7 +572,9 @@ TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdsAcrossRecov
       .group_tags = {},
   });
   ASSERT_TRUE(first_created.has_value());
-  EXPECT_EQ(first_created->id.value(), "s_1");
+  EXPECT_TRUE(IsGeneratedSessionId(first_created->id.value()));
+  EXPECT_NE(first_created->id.value(), "s_2");
+  EXPECT_NE(first_created->id.value(), "s_9");
   EXPECT_FALSE(first_created->is_recovered);
   EXPECT_TRUE(first_created->is_active);
   EXPECT_TRUE(first_created->created_at_unix_ms.has_value());
@@ -569,7 +590,10 @@ TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdsAcrossRecov
       .group_tags = {},
   });
   ASSERT_TRUE(second_created.has_value());
-  EXPECT_EQ(second_created->id.value(), "s_3");
+  EXPECT_TRUE(IsGeneratedSessionId(second_created->id.value()));
+  EXPECT_NE(second_created->id.value(), first_created->id.value());
+  EXPECT_NE(second_created->id.value(), "s_2");
+  EXPECT_NE(second_created->id.value(), "s_9");
   EXPECT_FALSE(second_created->is_recovered);
   EXPECT_TRUE(second_created->is_active);
 
@@ -577,8 +601,8 @@ TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdsAcrossRecov
   ASSERT_EQ(sessions.size(), 4U);
   EXPECT_EQ(sessions[0].id.value(), "s_2");
   EXPECT_EQ(sessions[1].id.value(), "s_9");
-  EXPECT_EQ(sessions[2].id.value(), "s_1");
-  EXPECT_EQ(sessions[3].id.value(), "s_3");
+  EXPECT_EQ(sessions[2].id.value(), first_created->id.value());
+  EXPECT_EQ(sessions[3].id.value(), second_created->id.value());
 }
 
 TEST(SessionManagerTest, CreateSessionNormalizesAndPersistsGroupTags) {
@@ -1268,7 +1292,7 @@ TEST(SessionManagerTest, ClearInactiveSessionsRemovesExitedAndRecoveredRecords) 
   EXPECT_EQ(session_store.removed[1], created->id.value());
 }
 
-TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdAfterCleanup) {
+TEST(SessionManagerTest, CreateSessionDoesNotReuseSessionIdAfterCleanup) {
   FakeSessionStore session_store;
   SessionManager manager(&session_store);
 
@@ -1292,8 +1316,9 @@ TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdAfterCleanup
   });
   ASSERT_TRUE(first.has_value());
   ASSERT_TRUE(second.has_value());
-  EXPECT_EQ(first->id.value(), "s_1");
-  EXPECT_EQ(second->id.value(), "s_2");
+  EXPECT_TRUE(IsGeneratedSessionId(first->id.value()));
+  EXPECT_TRUE(IsGeneratedSessionId(second->id.value()));
+  EXPECT_NE(first->id.value(), second->id.value());
 
   ASSERT_TRUE(manager.StopSession(first->id.value()));
   ASSERT_TRUE(manager.StopSession(second->id.value()));
@@ -1310,7 +1335,9 @@ TEST(SessionManagerTest, CreateSessionReusesLowestAvailableSessionIdAfterCleanup
       .group_tags = {},
   });
   ASSERT_TRUE(reused.has_value());
-  EXPECT_EQ(reused->id.value(), "s_1");
+  EXPECT_TRUE(IsGeneratedSessionId(reused->id.value()));
+  EXPECT_NE(reused->id.value(), first->id.value());
+  EXPECT_NE(reused->id.value(), second->id.value());
 }
 
 TEST(SessionManagerTest, PollAllUpdatesOutputAndActivityTimestampsForLiveSession) {

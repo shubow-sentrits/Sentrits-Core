@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <utility>
 
@@ -531,24 +532,6 @@ auto MakeRecoveredOutputSlice(const vibe::session::SessionSnapshot& snapshot,
       .seq_end = snapshot.current_sequence,
       .data = snapshot.recent_terminal_tail,
   };
-}
-
-auto ParseSessionSequenceNumber(const std::string& session_id) -> std::optional<std::size_t> {
-  constexpr std::string_view prefix = "s_";
-  if (!session_id.starts_with(prefix) || session_id.size() == prefix.size()) {
-    return std::nullopt;
-  }
-
-  std::size_t parsed_value = 0;
-  for (const char ch : session_id.substr(prefix.size())) {
-    if (ch < '0' || ch > '9') {
-      return std::nullopt;
-    }
-
-    parsed_value = (parsed_value * 10U) + static_cast<std::size_t>(ch - '0');
-  }
-
-  return parsed_value;
 }
 
 auto IsPathWithinRoot(const std::filesystem::path& root, const std::filesystem::path& candidate) -> bool {
@@ -2507,32 +2490,25 @@ void SessionManager::RecordCreateFailureSession(
 }
 
 auto SessionManager::MakeSessionId() const -> std::optional<vibe::session::SessionId> {
-  std::vector<std::size_t> used_sequence_numbers;
-  used_sequence_numbers.reserve(sessions_.size());
-  for (const SessionEntry& entry : sessions_) {
-    const auto parsed_value = ParseSessionSequenceNumber(entry.id.value());
-    if (!parsed_value.has_value()) {
+  static thread_local std::mt19937_64 random_engine(std::random_device{}());
+  std::uniform_int_distribution<std::uint64_t> distribution;
+
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+    std::ostringstream stream;
+    stream << "s_" << timestamp_ms << '_' << std::hex << std::setw(16) << std::setfill('0')
+           << distribution(random_engine);
+
+    const std::string next_value = stream.str();
+    if (FindEntry(next_value) != nullptr) {
       continue;
     }
-
-    used_sequence_numbers.push_back(*parsed_value);
+    return vibe::session::SessionId::TryCreate(next_value);
   }
 
-  std::sort(used_sequence_numbers.begin(), used_sequence_numbers.end());
-  used_sequence_numbers.erase(
-      std::unique(used_sequence_numbers.begin(), used_sequence_numbers.end()),
-      used_sequence_numbers.end());
-
-  std::size_t next_sequence_number = 1;
-  for (const std::size_t sequence_number : used_sequence_numbers) {
-    if (sequence_number != next_sequence_number) {
-      break;
-    }
-    next_sequence_number += 1;
-  }
-
-  const std::string next_value = "s_" + std::to_string(next_sequence_number);
-  return vibe::session::SessionId::TryCreate(next_value);
+  return std::nullopt;
 }
 
 auto SessionManager::FindEntry(const std::string& session_id) -> SessionEntry* {

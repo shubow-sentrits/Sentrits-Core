@@ -214,7 +214,9 @@ class FakeHostAdmin final : public vibe::net::HostAdmin {
 
   [[nodiscard]] auto DisconnectClient(const std::string& client_id) -> bool override {
     last_disconnected_client_id = client_id;
-    return client_id == "ws_s_1_1";
+    return std::ranges::any_of(clients, [&](const vibe::net::AttachedClientInfo& client) {
+      return client.client_id == client_id;
+    });
   }
 
   mutable std::vector<vibe::net::AttachedClientInfo> clients{
@@ -254,6 +256,19 @@ auto MakeAuthContext(FakeAuthorizer& authorizer,
       .remote_tls_certificate_path = "",
       .listener_role = listener_role,
   };
+}
+
+auto JsonStringFieldFromBody(const std::string& body, const std::string_view field) -> std::string {
+  boost::system::error_code parse_error;
+  const auto parsed = boost::json::parse(body, parse_error);
+  if (parse_error || !parsed.is_object()) {
+    return "";
+  }
+  const auto* value = parsed.as_object().if_contains(field);
+  if (value == nullptr || !value->is_string()) {
+    return "";
+  }
+  return boost::json::value_to<std::string>(*value);
 }
 
 class ScopedEnvVar {
@@ -462,7 +477,9 @@ TEST(HttpSharedTest, CanCreateAndListSessions) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
-  EXPECT_NE(create_response.body().find("\"sessionId\":\"s_1\""), std::string::npos);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
+  EXPECT_NE(create_response.body().find("\"sessionId\":\"" + session_id + "\""), std::string::npos);
   EXPECT_NE(create_response.body().find("\"groupTags\":[\"frontend\",\"mvp\"]"), std::string::npos);
 
   HttpRequest list_request;
@@ -475,7 +492,7 @@ TEST(HttpSharedTest, CanCreateAndListSessions) {
       HandleRequest(list_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(list_response.result(), http::status::ok);
-  EXPECT_NE(list_response.body().find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(list_response.body().find("\"sessionId\":\"" + session_id + "\""), std::string::npos);
   EXPECT_NE(list_response.body().find("\"groupTags\":[\"frontend\",\"mvp\"]"), std::string::npos);
 }
 
@@ -498,7 +515,7 @@ TEST(HttpSharedTest, AdminLocalCanCreateSessionWithoutBearerToken) {
       MakeAuthContext(authorizer, pairing_service, host_config_store, nullptr, nullptr,
                       ListenerRole::AdminLocal));
   EXPECT_EQ(create_response.result(), http::status::created);
-  EXPECT_NE(create_response.body().find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_FALSE(JsonStringFieldFromBody(create_response.body(), "sessionId").empty());
 }
 
 TEST(HttpSharedTest, ReturnsSessionDetailAndSnapshot) {
@@ -519,22 +536,24 @@ TEST(HttpSharedTest, ReturnsSessionDetailAndSnapshot) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest detail_request;
   detail_request.method(http::verb::get);
-  detail_request.target("/sessions/s_1");
+  detail_request.target("/sessions/" + session_id);
   detail_request.version(11);
   detail_request.set(http::field::authorization, "Bearer good-token");
   const HttpResponse detail_response =
       HandleRequest(detail_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(detail_response.result(), http::status::ok);
-  EXPECT_NE(detail_response.body().find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(detail_response.body().find("\"sessionId\":\"" + session_id + "\""), std::string::npos);
   EXPECT_NE(detail_response.body().find("\"groupTags\":[\"frontend\"]"), std::string::npos);
 
   HttpRequest snapshot_request;
   snapshot_request.method(http::verb::get);
-  snapshot_request.target("/sessions/s_1/snapshot");
+  snapshot_request.target("/sessions/" + session_id + "/snapshot");
   snapshot_request.version(11);
   snapshot_request.set(http::field::authorization, "Bearer good-token");
   const HttpResponse snapshot_response =
@@ -559,14 +578,16 @@ TEST(HttpSharedTest, MutatesSessionGroupTagsAndReadsBackNormalizedTags) {
   create_request.body() =
       "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"tag-target\",\"groupTags\":[\"frontend\"],\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
-  EXPECT_EQ(HandleRequest(create_request, session_manager,
-                          MakeAuthContext(authorizer, pairing_service, host_config_store))
-                .result(),
-            http::status::created);
+  const HttpResponse create_response =
+      HandleRequest(create_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store));
+  ASSERT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest groups_request;
   groups_request.method(http::verb::post);
-  groups_request.target("/sessions/s_1/groups");
+  groups_request.target("/sessions/" + session_id + "/groups");
   groups_request.version(11);
   groups_request.set(http::field::authorization, "Bearer good-token");
   groups_request.body() = R"({"mode":"add","tags":[" MVP ","frontend"]})";
@@ -580,7 +601,7 @@ TEST(HttpSharedTest, MutatesSessionGroupTagsAndReadsBackNormalizedTags) {
 
   HttpRequest detail_request;
   detail_request.method(http::verb::get);
-  detail_request.target("/sessions/s_1");
+  detail_request.target("/sessions/" + session_id);
   detail_request.version(11);
   detail_request.set(http::field::authorization, "Bearer good-token");
   const HttpResponse detail_response =
@@ -604,14 +625,16 @@ TEST(HttpSharedTest, RejectsInvalidSessionGroupTagsMutationRequest) {
   create_request.body() =
       "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"tag-target\",\"commandShell\":\"sleep 30\"}";
   create_request.prepare_payload();
-  EXPECT_EQ(HandleRequest(create_request, session_manager,
-                          MakeAuthContext(authorizer, pairing_service, host_config_store))
-                .result(),
-            http::status::created);
+  const HttpResponse create_response =
+      HandleRequest(create_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store));
+  ASSERT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest groups_request;
   groups_request.method(http::verb::post);
-  groups_request.target("/sessions/s_1/groups");
+  groups_request.target("/sessions/" + session_id + "/groups");
   groups_request.version(11);
   groups_request.set(http::field::authorization, "Bearer good-token");
   groups_request.body() = R"({"mode":"add","tags":["   "]})";
@@ -654,10 +677,12 @@ TEST(HttpSharedTest, ReturnsSessionFileContentWithinWorkspaceRoot) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest file_request;
   file_request.method(http::verb::get);
-  file_request.target("/sessions/s_1/file?path=src%2Fmain.cpp&bytes=1024");
+  file_request.target("/sessions/" + session_id + "/file?path=src%2Fmain.cpp&bytes=1024");
   file_request.version(11);
   file_request.set(http::field::authorization, "Bearer good-token");
   const HttpResponse file_response =
@@ -698,10 +723,12 @@ TEST(HttpSharedTest, RejectsInvalidSessionFilePath) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest file_request;
   file_request.method(http::verb::get);
-  file_request.target("/sessions/s_1/file?path=..%2Fsecret.txt");
+  file_request.target("/sessions/" + session_id + "/file?path=..%2Fsecret.txt");
   file_request.version(11);
   file_request.set(http::field::authorization, "Bearer good-token");
   const HttpResponse file_response =
@@ -744,10 +771,12 @@ TEST(HttpSharedTest, RejectsMalformedFileByteLimit) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest file_request;
   file_request.method(http::verb::get);
-  file_request.target("/sessions/s_1/file?path=src%2Fmain.cpp&bytes=abc");
+  file_request.target("/sessions/" + session_id + "/file?path=src%2Fmain.cpp&bytes=abc");
   file_request.version(11);
   file_request.set(http::field::authorization, "Bearer good-token");
   const HttpResponse file_response =
@@ -792,10 +821,12 @@ TEST(HttpSharedTest, CanFetchTailForExistingSession) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest tail_request;
   tail_request.method(http::verb::get);
-  tail_request.target("/sessions/s_1/tail?bytes=64");
+  tail_request.target("/sessions/" + session_id + "/tail?bytes=64");
   tail_request.version(11);
   tail_request.set(http::field::authorization, "Bearer good-token");
 
@@ -824,10 +855,12 @@ TEST(HttpSharedTest, RejectsMalformedTailByteLimit) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest tail_request;
   tail_request.method(http::verb::get);
-  tail_request.target("/sessions/s_1/tail?bytes=abc");
+  tail_request.target("/sessions/" + session_id + "/tail?bytes=abc");
   tail_request.version(11);
   tail_request.set(http::field::authorization, "Bearer good-token");
 
@@ -1428,10 +1461,12 @@ TEST(HttpSharedTest, SendsMessageToExistingSession) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   ASSERT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest message_request;
   message_request.method(http::verb::post);
-  message_request.target("/sessions/s_1/messages");
+  message_request.target("/sessions/" + session_id + "/messages");
   message_request.version(11);
   message_request.set(http::field::authorization, "Bearer good-token");
   message_request.body() = R"({"kind":"text","text":"hello from message"})";
@@ -1441,7 +1476,7 @@ TEST(HttpSharedTest, SendsMessageToExistingSession) {
       HandleRequest(message_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(message_response.result(), http::status::ok);
-  EXPECT_NE(message_response.body().find("\"targetSessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(message_response.body().find("\"targetSessionId\":\"" + session_id + "\""), std::string::npos);
   EXPECT_NE(message_response.body().find("\"kind\":\"text\""), std::string::npos);
   EXPECT_NE(message_response.body().find("\"payloadSizeBytes\":19"), std::string::npos);
   EXPECT_TRUE(WaitForFileContains(output_path, "hello from message"));
@@ -1507,10 +1542,12 @@ TEST(HttpSharedTest, StopIsIdempotentForExitedSession) {
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   HttpRequest stop_request;
   stop_request.method(http::verb::post);
-  stop_request.target("/sessions/s_1/stop");
+  stop_request.target("/sessions/" + session_id + "/stop");
   stop_request.version(11);
   stop_request.set(http::field::authorization, "Bearer good-token");
 
@@ -1896,10 +1933,15 @@ TEST(HttpSharedTest, ServesHostManagementRoutes) {
   create_request.body() =
       R"({"provider":"codex","workspaceRoot":".","title":"managed","command":["/bin/sh","-c","sleep 30"]})";
   create_request.prepare_payload();
-  EXPECT_EQ(HandleRequest(create_request, session_manager,
-                          MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin))
-                .result(),
-            http::status::created);
+  const HttpResponse create_response =
+      HandleRequest(create_request, session_manager,
+                    MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
+  ASSERT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
+  const std::string client_id = "ws_" + session_id + "_1";
+  host_admin.clients[0].session_id = session_id;
+  host_admin.clients[0].client_id = client_id;
 
   HttpRequest sessions_request;
   sessions_request.method(http::verb::get);
@@ -1909,7 +1951,7 @@ TEST(HttpSharedTest, ServesHostManagementRoutes) {
       HandleRequest(sessions_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
   EXPECT_EQ(sessions_response.result(), http::status::ok);
-  EXPECT_NE(sessions_response.body().find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_NE(sessions_response.body().find("\"sessionId\":\"" + session_id + "\""), std::string::npos);
   EXPECT_NE(sessions_response.body().find("\"activityState\":\"quiet\""), std::string::npos);
   EXPECT_NE(sessions_response.body().find("\"supervisionState\":\"quiet\""), std::string::npos);
   EXPECT_NE(sessions_response.body().find("\"isRecovered\":false"), std::string::npos);
@@ -1925,7 +1967,7 @@ TEST(HttpSharedTest, ServesHostManagementRoutes) {
       HandleRequest(clients_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
   EXPECT_EQ(clients_response.result(), http::status::ok);
-  EXPECT_NE(clients_response.body().find("\"clientId\":\"ws_s_1_1\""), std::string::npos);
+  EXPECT_NE(clients_response.body().find("\"clientId\":\"" + client_id + "\""), std::string::npos);
   EXPECT_NE(clients_response.body().find("\"sessionTitle\":\"managed\""), std::string::npos);
   EXPECT_NE(clients_response.body().find("\"sessionStatus\":\"Running\""), std::string::npos);
   EXPECT_NE(clients_response.body().find("\"connectedAtUnixMs\":123"), std::string::npos);
@@ -1948,17 +1990,17 @@ TEST(HttpSharedTest, ServesHostManagementRoutes) {
 
   HttpRequest disconnect_request;
   disconnect_request.method(http::verb::post);
-  disconnect_request.target("/host/clients/ws_s_1_1/disconnect");
+  disconnect_request.target("/host/clients/" + client_id + "/disconnect");
   disconnect_request.version(11);
   const HttpResponse disconnect_response =
       HandleRequest(disconnect_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store, &host_admin));
   EXPECT_EQ(disconnect_response.result(), http::status::ok);
-  EXPECT_EQ(host_admin.last_disconnected_client_id, "ws_s_1_1");
+  EXPECT_EQ(host_admin.last_disconnected_client_id, client_id);
 
   HttpRequest stop_request;
   stop_request.method(http::verb::post);
-  stop_request.target("/host/sessions/s_1/stop");
+  stop_request.target("/host/sessions/" + session_id + "/stop");
   stop_request.version(11);
   const HttpResponse stop_response =
       HandleRequest(stop_request, session_manager,
@@ -2014,11 +2056,13 @@ TEST(HttpSharedTest, CreateSessionAppliesProviderOverrideFromInteractiveShellSta
       HandleRequest(create_request, session_manager,
                     MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(create_response.result(), http::status::created);
+  const std::string session_id = JsonStringFieldFromBody(create_response.body(), "sessionId");
+  ASSERT_FALSE(session_id.empty());
 
   std::optional<vibe::service::SessionSummary> summary;
   for (int attempt = 0; attempt < 50; ++attempt) {
     session_manager.PollAll(10);
-    summary = session_manager.GetSession("s_1");
+    summary = session_manager.GetSession(session_id);
     if (summary.has_value() && summary->status == vibe::session::SessionStatus::Exited) {
       break;
     }
@@ -2028,7 +2072,7 @@ TEST(HttpSharedTest, CreateSessionAppliesProviderOverrideFromInteractiveShellSta
   ASSERT_TRUE(summary.has_value());
   EXPECT_EQ(summary->status, vibe::session::SessionStatus::Exited);
 
-  const auto tail = session_manager.GetTail("s_1", 4096);
+  const auto tail = session_manager.GetTail(session_id, 4096);
   ASSERT_TRUE(tail.has_value());
   EXPECT_NE(tail->data.find("fixture:path-command provider-only-cmd"), std::string::npos);
 
@@ -2177,7 +2221,7 @@ TEST(HttpSharedTest, CreateSessionFailureIncludesExplicitDetail) {
       HandleRequest(request, session_manager, MakeAuthContext(authorizer, pairing_service, host_config_store));
   EXPECT_EQ(response.result(), http::status::internal_server_error);
   EXPECT_NE(response.body().find("\"error\":\"failed to create session\""), std::string::npos);
-  EXPECT_NE(response.body().find("\"sessionId\":\"s_1\""), std::string::npos);
+  EXPECT_FALSE(JsonStringFieldFromBody(response.body(), "sessionId").empty());
   EXPECT_NE(response.body().find("\"detail\":\"execvp claude: No such file or directory\""),
             std::string::npos);
 }
