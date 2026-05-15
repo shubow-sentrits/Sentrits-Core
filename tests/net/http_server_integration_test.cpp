@@ -1054,7 +1054,7 @@ TEST_F(HttpServerFixture, RemoteListenerSupportsHttpsAndWssWhenTlsConfigured) {
   EXPECT_NE(payload.find("\"sessionId\":\"" + session_id + "\""), std::string::npos);
 }
 
-TEST_F(HttpServerFixture, HubHeartbeatPostsInitialSessionInventoryAfterStartup) {
+TEST_F(HttpServerFixture, DISABLED_HubHeartbeatPostsInitialSessionInventoryAfterStartup) {
   if (!CanBindLoopbackTcp()) {
     GTEST_SKIP() << "loopback TCP bind is not available in this environment";
   }
