@@ -218,7 +218,7 @@ auto FilterLocalReclaimInput(const std::string_view input) -> FilteredInput {
   }
 
   // Kitty/ghostty-style enhanced keyboard sequences may include an event-type suffix.
-  for (const auto [kitty_prefix, detach] : {
+  for (const auto& [kitty_prefix, detach] : {
            std::pair<std::string_view, bool>{"\x1b[93;5:", false},
            std::pair<std::string_view, bool>{"\x1b[92;5:", true},
        }) {
