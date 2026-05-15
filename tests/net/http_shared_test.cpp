@@ -271,6 +271,21 @@ auto JsonStringFieldFromBody(const std::string& body, const std::string_view fie
   return boost::json::value_to<std::string>(*value);
 }
 
+auto ShellSingleQuote(const std::string_view value) -> std::string {
+  std::string quoted;
+  quoted.reserve(value.size() + 2U);
+  quoted.push_back('\'');
+  for (const char ch : value) {
+    if (ch == '\'') {
+      quoted += "'\"'\"'";
+      continue;
+    }
+    quoted.push_back(ch);
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
 class ScopedEnvVar {
  public:
   ScopedEnvVar(const char* name, const std::string& value) : name_(name) {
@@ -1444,8 +1459,12 @@ TEST(HttpSharedTest, SendsMessageToExistingSession) {
   FakeHostConfigStore host_config_store;
   const auto temp_dir = MakeTempDir("sentrits-http-shared-message-send");
   const auto output_path = temp_dir / "message.txt";
-  const std::string command =
-      "while IFS= read -r line; do printf \"%s\" \"$line\" > " + output_path.string() + "; done";
+  const auto script_path = temp_dir / "capture-message.sh";
+  WriteExecutable(script_path,
+                  "#!/bin/sh\n"
+                  "IFS= read -r line\n"
+                  "printf \"%s\" \"$line\" > " +
+                      ShellSingleQuote(output_path.string()) + "\n");
 
   HttpRequest create_request;
   create_request.method(http::verb::post);
@@ -1454,8 +1473,8 @@ TEST(HttpSharedTest, SendsMessageToExistingSession) {
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() = "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"message-target\","
                           "\"envMode\":\"clean\","
-                          "\"commandShell\":\"" +
-                          JsonEscape(command) + "\"}";
+                          "\"command\":[\"" +
+                          JsonEscape(script_path.string()) + "\"]}";
   create_request.prepare_payload();
   const HttpResponse create_response =
       HandleRequest(create_request, session_manager,
@@ -1480,6 +1499,8 @@ TEST(HttpSharedTest, SendsMessageToExistingSession) {
   EXPECT_NE(message_response.body().find("\"kind\":\"text\""), std::string::npos);
   EXPECT_NE(message_response.body().find("\"payloadSizeBytes\":19"), std::string::npos);
   EXPECT_TRUE(WaitForFileContains(output_path, "hello from message"));
+  static_cast<void>(session_manager.Shutdown());
+  std::filesystem::remove_all(temp_dir);
 }
 
 TEST(HttpSharedTest, MessageRequestUsesControlSessionAuthorization) {
