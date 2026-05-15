@@ -271,21 +271,6 @@ auto JsonStringFieldFromBody(const std::string& body, const std::string_view fie
   return boost::json::value_to<std::string>(*value);
 }
 
-auto ShellSingleQuote(const std::string_view value) -> std::string {
-  std::string quoted;
-  quoted.reserve(value.size() + 2U);
-  quoted.push_back('\'');
-  for (const char ch : value) {
-    if (ch == '\'') {
-      quoted += "'\"'\"'";
-      continue;
-    }
-    quoted.push_back(ch);
-  }
-  quoted.push_back('\'');
-  return quoted;
-}
-
 class ScopedEnvVar {
  public:
   ScopedEnvVar(const char* name, const std::string& value) : name_(name) {
@@ -311,6 +296,34 @@ class ScopedEnvVar {
  private:
   const char* name_;
   std::optional<std::string> previous_value_;
+};
+
+class CapturingPtyProcess final : public vibe::session::IPtyProcess {
+ public:
+  CapturingPtyProcess(std::string* captured_input, bool* terminated)
+      : captured_input_(captured_input), terminated_(terminated) {}
+
+  [[nodiscard]] auto Start(const vibe::session::LaunchSpec&) -> vibe::session::StartResult override {
+    return {.started = true, .pid = 123, .error_message = ""};
+  }
+
+  [[nodiscard]] auto Write(const std::string_view input) -> bool override {
+    captured_input_->append(input);
+    return true;
+  }
+
+  [[nodiscard]] auto Read(int) -> vibe::session::ReadResult override { return {}; }
+  [[nodiscard]] auto ReadableFd() const -> std::optional<int> override { return std::nullopt; }
+  [[nodiscard]] auto Resize(vibe::session::TerminalSize) -> bool override { return true; }
+  [[nodiscard]] auto PollExit() -> std::optional<int> override { return std::nullopt; }
+  [[nodiscard]] auto Terminate() -> bool override {
+    *terminated_ = true;
+    return true;
+  }
+
+ private:
+  std::string* captured_input_{nullptr};
+  bool* terminated_{nullptr};
 };
 
 auto MakeTempDir(const std::string& test_name) -> std::filesystem::path {
@@ -344,20 +357,6 @@ void ConfigureInteractiveShellPathFixture(const std::filesystem::path& home_dir,
   WriteExecutable(bin_dir / command_name,
                   "#!/bin/sh\n"
                   "printf 'fixture:path-command %s\\n' \"" + command_name + "\"\n");
-}
-
-auto WaitForFileContains(const std::filesystem::path& path, const std::string& expected) -> bool {
-  for (int attempt = 0; attempt < 20; ++attempt) {
-    std::ifstream input(path, std::ios::binary);
-    if (input.is_open()) {
-      const std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-      if (content.find(expected) != std::string::npos) {
-        return true;
-      }
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(25));
-  }
-  return false;
 }
 
 TEST(HttpSharedTest, ReturnsHealthResponse) {
@@ -1453,18 +1452,15 @@ TEST(HttpSharedTest, RejectsInvalidInputRequest) {
 }
 
 TEST(HttpSharedTest, SendsMessageToExistingSession) {
-  auto session_manager = MakeManager();
+  std::string captured_input;
+  bool terminated = false;
+  vibe::service::SessionManager session_manager(
+      nullptr, [&captured_input, &terminated]() -> std::unique_ptr<vibe::session::IPtyProcess> {
+        return std::make_unique<CapturingPtyProcess>(&captured_input, &terminated);
+      });
   FakeAuthorizer authorizer;
   FakePairingService pairing_service;
   FakeHostConfigStore host_config_store;
-  const auto temp_dir = MakeTempDir("sentrits-http-shared-message-send");
-  const auto output_path = temp_dir / "message.txt";
-  const auto script_path = temp_dir / "capture-message.sh";
-  WriteExecutable(script_path,
-                  "#!/bin/sh\n"
-                  "IFS= read -r line\n"
-                  "printf \"%s\" \"$line\" > " +
-                      ShellSingleQuote(output_path.string()) + "\n");
 
   HttpRequest create_request;
   create_request.method(http::verb::post);
@@ -1473,8 +1469,7 @@ TEST(HttpSharedTest, SendsMessageToExistingSession) {
   create_request.set(http::field::authorization, "Bearer good-token");
   create_request.body() = "{\"provider\":\"codex\",\"workspaceRoot\":\".\",\"title\":\"message-target\","
                           "\"envMode\":\"clean\","
-                          "\"command\":[\"" +
-                          JsonEscape(script_path.string()) + "\"]}";
+                          "\"command\":[\"fake-agent\"]}";
   create_request.prepare_payload();
   const HttpResponse create_response =
       HandleRequest(create_request, session_manager,
@@ -1498,9 +1493,9 @@ TEST(HttpSharedTest, SendsMessageToExistingSession) {
   EXPECT_NE(message_response.body().find("\"targetSessionId\":\"" + session_id + "\""), std::string::npos);
   EXPECT_NE(message_response.body().find("\"kind\":\"text\""), std::string::npos);
   EXPECT_NE(message_response.body().find("\"payloadSizeBytes\":19"), std::string::npos);
-  EXPECT_TRUE(WaitForFileContains(output_path, "hello from message"));
-  static_cast<void>(session_manager.Shutdown());
-  std::filesystem::remove_all(temp_dir);
+  EXPECT_EQ(captured_input, "hello from message\n");
+  EXPECT_EQ(session_manager.Shutdown(), 1U);
+  EXPECT_TRUE(terminated);
 }
 
 TEST(HttpSharedTest, MessageRequestUsesControlSessionAuthorization) {
